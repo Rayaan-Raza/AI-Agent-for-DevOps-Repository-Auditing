@@ -132,6 +132,7 @@ class GroqClient:
         model: str = DEFAULT_MODEL,
         reasoning_effort: str | None = "medium",
         max_completion_tokens: int = 1000,
+        max_wait_seconds: float = 300.0,
         timeout: float = 90.0,
         log=None,
     ):
@@ -146,6 +147,7 @@ class GroqClient:
         self.model = model
         self.reasoning_effort = reasoning_effort if model.startswith(REASONING_MODELS) else None
         self.max_completion_tokens = max_completion_tokens
+        self.max_wait_seconds = max_wait_seconds
         self.log = log or (lambda msg: print(msg, file=sys.stderr))
         self.limiter = RateLimiter(log=self.log)
         self.calibration = 1.0  # real prompt tokens / estimated prompt tokens
@@ -188,10 +190,10 @@ class GroqClient:
                 raise LLMError(f"Model {self.model!r} is not available on this Groq account (404).") from e
             except groq.RateLimitError as e:
                 retry = parse_duration(e.response.headers.get("retry-after")) if e.response else 0
-                if retry > 300:
+                if retry > self.max_wait_seconds:
                     raise LLMError(
                         f"Groq rate limit: retry after {retry:.0f} s. The daily token or "
-                        "request limit is probably used up."
+                        "request limit is probably used up. Set LLM_MAX_WAIT_SECONDS to wait longer."
                     ) from e
                 wait = max(retry, 5.0 * (attempt + 1))
                 self.log(f"rate limit (429): waiting {wait:.0f} s")

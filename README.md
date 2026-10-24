@@ -56,6 +56,7 @@ Do these steps in a terminal:
 | `LLM_REASONING_EFFORT` | `low` | `low`, `medium`, or `high`. Only for reasoning models. A higher value uses more tokens. |
 | `MAX_STEPS` | `35` | Maximum number of LLM steps in the investigation |
 | `MAX_SECONDS` | `1800` | Maximum run time in seconds |
+| `LLM_MAX_WAIT_SECONDS` | `300` | Longest wait for a rate limit. If Groq asks for a longer wait, the agent stops. Set a larger value for the Groq free tier. |
 
 You can also set these values as environment variables. The `.env` file is in `.gitignore`. Do not commit it.
 

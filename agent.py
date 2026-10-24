@@ -109,7 +109,13 @@ def main(argv: list[str] | None = None, llm_factory=None) -> int:
         llm = (
             llm_factory()
             if llm_factory
-            else GroqClient(api_key=api_key, model=model, reasoning_effort=effort, log=say)
+            else GroqClient(
+                api_key=api_key,
+                model=model,
+                reasoning_effort=effort,
+                max_wait_seconds=env_int("LLM_MAX_WAIT_SECONDS", 300),
+                log=say,
+            )
         )
         say(f"cloning {args.repo} ...")
         repo = clone(args.repo, allow_local=args.allow_local)
