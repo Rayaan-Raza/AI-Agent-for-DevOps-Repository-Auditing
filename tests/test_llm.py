@@ -141,8 +141,26 @@ def test_short_rate_limit_then_success(monkeypatch):
     assert out.tool_calls[0].name == "finish" and out.reasoning == "thinking"
     assert out.usage == {"prompt": 10, "completion": 5}
     assert client.limiter.remaining_tokens == 7000
+    assert client.calibration < 1.0  # real usage was below the estimate
 
 
 def test_reasoning_effort_only_for_supported_models():
     assert GroqClient(api_key="k" * 10, model="openai/gpt-oss-20b").reasoning_effort == "medium"
     assert GroqClient(api_key="k" * 10, model="llama-3.3-70b-versatile").reasoning_effort is None
+
+
+def test_length_cutoff_retries_with_more_tokens(monkeypatch):
+    from auditor.llm import LLMResponse, ToolCall
+
+    client = GroqClient(api_key="k" * 10, log=lambda m: None)
+    seen = []
+
+    def fake_request(messages, tools, max_tokens):
+        seen.append(max_tokens)
+        if len(seen) == 1:
+            return LLMResponse(content="", tool_calls=[], finish_reason="length")
+        return LLMResponse(content="", tool_calls=[ToolCall("c", "finish", "{}")], finish_reason="tool_calls")
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    out = client.complete([], [])
+    assert out.tool_calls and seen == [1000, 3000]

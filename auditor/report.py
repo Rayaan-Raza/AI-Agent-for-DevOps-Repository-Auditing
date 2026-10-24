@@ -212,7 +212,7 @@ def validate_candidate(
                 continue
             o = c.data
             if (o["rule_id"], o["file"], o["line"]) == (rid, f, line):
-                errors.append(f"Duplicate of {c.id}. Use update_violation to change {c.id}.")
+                errors.append(f"Duplicate of {c.id} (already recorded). Do not record it again.")
                 break
 
     return (None if errors else d), errors, warnings

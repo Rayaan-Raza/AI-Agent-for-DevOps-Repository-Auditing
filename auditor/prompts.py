@@ -13,15 +13,18 @@ METHOD
 Dockerfiles, release/deploy scripts.
 3. For each area form a hypothesis, then call ONE tool to confirm or reject it. Choose each next tool from what \
 the last result showed; follow up on new leads (e.g. a secret name -> where it is used; a deleted file -> git_log).
-4. Before record_violation, see the exact line with read_file or search_code (or a tool that prints [line N]).
-5. RECORD IMMEDIATELY: when a result shows a violation, your NEXT call is record_violation (one per call). \
-Do not re-read a file to "confirm" it: the result you saw is the evidence. Never repeat an identical call.
+4. Before recording a line, see it with read_file or search_code (or a tool that prints [line N]).
+5. RECORD IMMEDIATELY: when a result shows violations, your NEXT call is record_violations with ALL of them \
+in one list. Do not re-read a file to "confirm": the result you saw is the evidence. Never repeat a call.
 6. Mark areas with update_coverage (it takes a list of areas). When every area is examined or not_applicable, \
-call finish. Use the profile: an absent key-file group (e.g. no tests/, no workflows) is already evidence.
+call finish. Target: finish in about 20 steps.
+FACTS YOU ALREADY HAVE: the AUDIT STATE lists the tracked files and which key-file groups have no match. \
+Do not search for file names that the list already shows or that a profile group shows absent: that is your \
+evidence (use kind=absent). search_code searches file CONTENTS and also reports matching PATHS.
 Old tool results leave your context after a few steps; "Files already seen" lists what you read. Save facts \
 that are not violations with add_note.
-Efficient start: list_files, then inspect_workflows / git_tracked_ignored / inspect_dependencies as relevant, \
-then read the risky files they point to.
+Good start: inspect_workflows (if any), git_tracked_ignored, inspect_dependencies, then read config/settings, \
+env and deploy files, then git_log(search=...) for secrets that were removed.
 
 EVIDENCE RULES (precision matters: false positives cost points)
 - Report only what a tool showed. Never guess. If a check is unavailable, do not report it.
@@ -57,11 +60,11 @@ DEP-001 unpinned deps, DEP-002 missing lockfile, DEP-003 inconsistent specs, HYG
 .gitignore, HYG-003 tracked temp/generated files, CFG-001 machine path, CFG-002 committed local settings, \
 COL-001 unsafe PR automation, COL-002 no review guidance, BLD-001 no build validation, BLD-002 risky deploy.
 
-record_violation fields: file=null and line=null when not applicable. kind: present | absent (give absent_globs) \
+record_violations item fields: file=null and line=null when not applicable. kind: present | absent (give absent_globs) \
 | history (file may be deleted; line null; name the commit in evidence). confidence: high only with direct \
 evidence. Evidence: short and factual; never copy a secret value. Recommendation: one concrete action.
 
-Always answer with a tool call. Every investigation tool needs a one-sentence "reason"."""
+Always answer with a tool call. Give every investigation tool a one-sentence "reason"."""
 
 REVIEW_PROMPT = """SELF-REVIEW. The investigation is over. Below are your candidate violations.
 For each one ask: (1) did a tool show direct evidence? (2) is an equivalent solution present? \
@@ -82,4 +85,11 @@ FINISH_WITH_PENDING = (
     "These areas are not examined yet: {areas}. Examine them, or mark them "
     "not_applicable with update_coverage, then call finish again."
 )
-BUDGET_LOW = "Budget low: {left} steps left. Cover the pending areas quickly, then call finish."
+BUDGET_LOW = (
+    "Budget low: {left} steps left. Record any violations you saw but did not record "
+    "(record_violations), mark the remaining areas with update_coverage, then call finish."
+)
+LOOPING = (
+    "WARNING: you repeated {n} identical calls. You already have that evidence. Record the "
+    "violations it showed now, mark areas examined, and move on or call finish."
+)

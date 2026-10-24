@@ -33,10 +33,10 @@ REVIEW_TOOLS = [
 
 @dataclass
 class LoopConfig:
-    max_steps: int = 50
+    max_steps: int = 35
     max_seconds: float = 1800.0
     review_steps: int = 8
-    prompt_budget: int = 4800
+    prompt_budget: int = 4000
     window: int = 6
     allow_exec: bool = False
     max_tool_failures: int = 3
@@ -161,7 +161,7 @@ class AuditLoop:
                 args = toolbox.parse_arguments(call.name, call.arguments)
                 text = (
                     f"REPEATED CALL: you already ran this exact call at step {prev_step}. Do not repeat "
-                    "calls. Act on the result now: record_violation, add_note, update_coverage, or "
+                    "calls. Act on the result now: record_violations, add_note, update_coverage, or "
                     f"investigate a different file or area.\nResult of step {prev_step}:\n" + prev_text[:2500]
                 )
                 ok = False
@@ -202,7 +202,7 @@ class AuditLoop:
         step = 0
         no_tool = tool_fail = 0
         finish_reminded = False
-        allowed = toolbox.tool_names(self.cfg.allow_exec)
+        allowed = toolbox.tool_names(self.cfg.allow_exec, phase="investigation")
         while True:
             if self.out_of_time():
                 return "time", step
@@ -211,8 +211,10 @@ class AuditLoop:
             step += 1
             extra = []
             left = self.cfg.max_steps - step
-            if step >= 0.75 * self.cfg.max_steps:
+            if step >= 0.6 * self.cfg.max_steps:
                 extra.append(prompts.BUDGET_LOW.format(left=left))
+            if self.repeats >= 2:
+                extra.append(prompts.LOOPING.format(n=self.repeats))
             try:
                 resp, elapsed, _ = self._ask(
                     "investigation", step, self.cfg.max_steps, allowed, turns, extra, tail
@@ -241,6 +243,9 @@ class AuditLoop:
                         "phase": "investigation",
                         "event": "no_tool_call",
                         "content": resp.content[:300],
+                        "finish_reason": getattr(resp, "finish_reason", ""),
+                        "reasoning": (resp.reasoning or "")[:600],
+                        "tokens": resp.usage,
                     }
                 )
                 if no_tool >= self.cfg.max_no_tool:

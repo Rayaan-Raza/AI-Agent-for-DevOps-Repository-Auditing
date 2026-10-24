@@ -254,3 +254,30 @@ def test_state_tools(ctx):
     assert "Note recorded" in tools.execute(ctx, "add_note", {"text": "CI runs on push only"})[0]
     tools.execute(ctx, "finish", {"summary": "done"})
     assert ctx.state.finished
+
+
+def test_record_violations_list_and_coercion(ctx):
+    tools.read_file(ctx, "app/config.py")
+    items = [
+        good(),
+        good(rule_id="SEC-008", severity="low", line="3", description="Debug on"),
+        good(file="missing.py"),
+    ]
+    out, _, ok = tools.execute(ctx, "record_violations", {"violations": items})
+    assert ok
+    assert "item 1: Recorded V1" in out and "item 2: Recorded V2" in out and "item 3: REJECTED" in out
+    assert ctx.state.candidates[1].data["line"] == 3
+    # A single object and a JSON string are accepted too.
+    out, _, ok = tools.execute(
+        ctx, "record_violations", {"violations": good(rule_id="SEC-009", line=5, description="x")}
+    )
+    assert ok and "Recorded V3" in out
+    out, _, ok = tools.execute(
+        ctx, "record_violations", {"violations": json.dumps([good(rule_id="SEC-010", line=1)])}
+    )
+    assert ok and "Recorded V4" in out
+
+
+def test_reason_not_required_by_api_schema():
+    for spec in tools.tool_schemas(tools.tool_names(True)):
+        assert "reason" not in spec["function"]["parameters"]["required"]

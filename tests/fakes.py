@@ -8,6 +8,9 @@ from auditor.llm import LLMResponse, ToolCall, ToolUseFailed
 
 
 def call(name: str, **args) -> ToolCall:
+    """Make a tool call. call("record_violation", **fields) is sent as record_violations with one item."""
+    if name == "record_violation":
+        name, args = "record_violations", {"violations": [args]}
     call.n += 1
     return ToolCall(id=f"call_{call.n}", name=name, arguments=json.dumps(args))
 

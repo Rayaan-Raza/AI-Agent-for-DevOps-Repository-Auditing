@@ -78,7 +78,7 @@ def test_dynamic_investigation_records_and_finishes(state, tmp_path):
     tool_records = [r for r in trace.records if "tool" in r]
     assert tool_records[0]["args"]["reason"] == "profile shows one workflow"
     assert (tmp_path / "t.jsonl").read_text().count("\n") == len(trace.records)
-    assert "record_violation" not in llm.tools_seen[-1]  # review phase tool set
+    assert "record_violations" not in llm.tools_seen[-1]  # review phase tool set
 
 
 def test_rejected_violation_is_fed_back(state):

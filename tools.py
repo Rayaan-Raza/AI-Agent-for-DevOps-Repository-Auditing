@@ -213,12 +213,35 @@ def search_code(
     ignore_case: bool = False,
     max_results: int = 40,
 ) -> str:
-    if not pattern or len(pattern) > 200:
-        raise ToolError("pattern must have 1 to 200 characters.")
+    if len(pattern or "") > 200:
+        raise ToolError("pattern must have at most 200 characters.")
+    if not pattern:
+        if not path_glob:
+            raise ToolError("Give a pattern, or a path_glob to list the files that match it.")
+        listed = sorted(p for p in ctx.repo.files if glob_match(p, path_glob))
+        if not listed:
+            return f"0 tracked files match {path_glob!r}."
+        more = " ..." if len(listed) > 60 else ""
+        return f"{len(listed)} tracked files match {path_glob!r}: " + ", ".join(listed[:60]) + more
     try:
         rx = regex.compile(pattern, regex.IGNORECASE if ignore_case else 0)
     except regex.error as e:
         raise ToolError(f"Invalid regular expression: {e}") from None
+    path_hits = []
+    for rel in sorted(ctx.repo.files):
+        if path_glob and not glob_match(rel, path_glob):
+            continue
+        try:
+            if rx.search(rel, timeout=0.2):
+                path_hits.append(rel)
+        except TimeoutError:
+            pass
+    if path_hits:
+        path_line = "Tracked files whose PATH matches: " + ", ".join(path_hits[:20])
+        if len(path_hits) > 20:
+            path_line += f" (+{len(path_hits) - 20} more)"
+    else:
+        path_line = "No tracked file PATH matches."
     max_results = max(1, min(int(max_results), 100))
     deadline = time.monotonic() + 20
     hits, total, files_with_hits, timeouts = [], 0, set(), 0
@@ -252,13 +275,14 @@ def search_code(
                 ctx.state.mark_seen(rel, [n])
     if total == 0:
         scope = f" in files matching {path_glob!r}" if path_glob else ""
-        return f"No matches for {pattern!r}{scope}." + (f" ({timeouts} lines timed out.)" if timeouts else "")
-    summary = f"{total} matches in {len(files_with_hits)} files"
+        timed = f" ({timeouts} lines timed out.)" if timeouts else ""
+        return f"{path_line}\nNo CONTENT matches for {pattern!r}{scope}.{timed}"
+    summary = f"{total} content matches in {len(files_with_hits)} files"
     if total > max_results:
         summary += f" (first {max_results} shown)"
     if timeouts:
         summary += f"; {timeouts} lines timed out"
-    return clip("\n".join(hits) + "\n" + summary + ".")
+    return clip(path_line + "\nCONTENT matches:\n" + "\n".join(hits) + "\n" + summary + ".")
 
 
 def git_log(
@@ -462,7 +486,7 @@ def _describe_workflow(rel: str, text: str, seen: set[int]) -> list[str]:
 
 
 def inspect_workflows(ctx: ToolContext, path: str | None = None) -> str:
-    if path:
+    if path and not safe_path(ctx, path, must_exist=False)[1].is_dir():
         rel, _ = safe_path(ctx, path)
         targets = [rel]
     else:
@@ -924,6 +948,20 @@ def record_violation(ctx: ToolContext, **kwargs) -> str:
     return msg
 
 
+def record_violations(ctx: ToolContext, violations: list) -> str:
+    if not violations:
+        raise ToolError("violations must be a non-empty list.")
+    out = []
+    for i, item in enumerate(violations[:10], 1):
+        if not isinstance(item, dict):
+            out.append(f"item {i}: REJECTED: each item must be an object.")
+            continue
+        out.append(f"item {i}: " + record_violation(ctx, **item))
+    if len(violations) > 10:
+        out.append("Only the first 10 items were processed. Send the rest in a new call.")
+    return "\n".join(out)
+
+
 def update_violation(ctx: ToolContext, id: str, **changes) -> str:
     from auditor.report import validate_candidate
 
@@ -938,7 +976,7 @@ def update_violation(ctx: ToolContext, id: str, **changes) -> str:
     return f"Updated {c.id}." + ("\nWARNING: " + " ".join(warnings) if warnings else "")
 
 
-def retract_violation(ctx: ToolContext, id: str, reason: str) -> str:
+def retract_violation(ctx: ToolContext, id: str, reason: str = "") -> str:
     c = ctx.state.get_candidate(id)
     if c is None or c.retracted:
         raise ToolError(f"No active violation {id!r}.")
@@ -954,7 +992,7 @@ def finish(ctx: ToolContext, summary: str = "") -> str:
 
 # ------------------------------------------------------------ registry ---
 
-_REASON = {"type": "string", "description": "One sentence: why you call this tool now."}
+_REASON = {"type": "string", "description": "Why you call this tool (one sentence)."}
 _STR = {"type": "string"}
 _INT = {"type": "integer"}
 _BOOL = {"type": "boolean"}
@@ -963,14 +1001,34 @@ _NULLABLE_INT = {"type": ["integer", "null"]}
 
 
 def _schema(props: dict, required: list[str]) -> dict:
-    return {"type": "object", "properties": props, "required": required}
+    # "reason" is requested by the prompt but not required: Groq rejects a call that misses a required field.
+    return {"type": "object", "properties": props, "required": [r for r in required if r != "reason"]}
+
+
+_VIOLATION_ITEM = {
+    "type": "object",
+    "properties": {
+        "rule_id": {**_STR, "description": "e.g. SEC-001"},
+        "category": {"type": "string", "enum": list(CATEGORIES)},
+        "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+        "file": _NULLABLE_STR,
+        "line": _NULLABLE_INT,
+        "description": _STR,
+        "evidence": _STR,
+        "recommendation": _STR,
+        "kind": {"type": "string", "enum": ["present", "absent", "history"]},
+        "absent_globs": {"type": "array", "items": _STR},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    },
+    "required": ["rule_id", "category", "severity", "description", "evidence", "recommendation"],
+}
 
 
 # name -> (function, description, parameters schema, takes a "reason" argument)
 TOOL_DEFS: dict[str, tuple] = {
     "list_files": (
         list_files,
-        "List tracked files with size and line count. Deep or vendored directories show as one line.",
+        "List tracked files with size and line count.",
         _schema(
             {
                 "path": _STR,
@@ -984,14 +1042,13 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "read_file": (
         read_file,
-        "Read a text file with line numbers (max 200 lines per call). Secrets show as <REDACTED:...>.",
+        "Read a text file with line numbers (max 200 lines). Secrets show as <REDACTED:...>.",
         _schema({"path": _STR, "start_line": _INT, "end_line": _INT, "reason": _REASON}, ["path", "reason"]),
         True,
     ),
     "search_code": (
         search_code,
-        "Regex search over tracked text files. Returns file:line: text. Skips vendored dirs unless "
-        "path_glob names them.",
+        "Regex search of file contents and paths. Returns file:line: text.",
         _schema(
             {
                 "pattern": _STR,
@@ -1006,8 +1063,7 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "git_log": (
         git_log,
-        "Commit history: hash, date, author, subject, changed files. search=TEXT finds commits that "
-        "add or remove TEXT (git log -S). show_patch=true shows diffs.",
+        "Commit history with changed files. search=TEXT: commits that add or remove TEXT. show_patch: diffs.",
         _schema(
             {"max_count": _INT, "path": _STR, "search": _STR, "show_patch": _BOOL, "reason": _REASON},
             ["reason"],
@@ -1016,29 +1072,26 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "inspect_workflows": (
         inspect_workflows,
-        "Facts about GitHub Actions workflows with line numbers: triggers, permissions, jobs, steps, "
-        "action refs (sha/tag/branch), with/env values, secrets used, untrusted-input expressions.",
+        "GitHub Actions facts with line numbers: triggers, permissions, steps, action refs, secrets, "
+        "untrusted expressions.",
         _schema({"path": _STR, "reason": _REASON}, ["reason"]),
         True,
     ),
     "inspect_dependencies": (
         inspect_dependencies,
-        "Parse dependency manifests: each dependency with its constraint type (exact, range, "
-        "lower_only, none, url_or_path), lockfiles present, conflicting constraints.",
+        "Dependencies with constraint type (exact/range/lower_only/none), lockfiles, conflicts.",
         _schema({"reason": _REASON}, ["reason"]),
         True,
     ),
     "git_tracked_ignored": (
         git_tracked_ignored,
-        "Tracked files that match .gitignore, and tracked files that match common temporary, local "
-        "or secret file patterns.",
+        "Tracked files that match .gitignore or common temp/local/secret patterns.",
         _schema({"reason": _REASON}, ["reason"]),
         True,
     ),
     "run_ruff": (
         run_ruff,
-        "Run the ruff linter (static, does not execute code): issue counts by rule and the first "
-        "issues. Tells if the repository has a ruff config.",
+        "Static lint with ruff (does not run code). Counts by rule.",
         _schema({"path": _STR, "reason": _REASON}, ["reason"]),
         True,
     ),
@@ -1050,13 +1103,13 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "add_note": (
         add_note,
-        "Keep a short fact (max 200 chars). Old tool results leave your context; notes stay.",
+        "Keep a short fact that is not a violation.",
         _schema({"text": _STR}, ["text"]),
         False,
     ),
     "update_coverage": (
         update_coverage,
-        "Set the status of one or more inspection areas: in_progress, examined or not_applicable.",
+        "Set the status of inspection areas.",
         _schema(
             {
                 "areas": {"type": "array", "items": {"type": "string", "enum": AREAS}, "minItems": 1},
@@ -1067,40 +1120,10 @@ TOOL_DEFS: dict[str, tuple] = {
         ),
         False,
     ),
-    "record_violation": (
-        record_violation,
-        "Record one violation with direct evidence. Python validates it and can reject it.",
-        _schema(
-            {
-                "rule_id": {**_STR, "description": "e.g. SEC-001; the prefix must match the category"},
-                "category": {"type": "string", "enum": list(CATEGORIES)},
-                "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-                "file": {**_NULLABLE_STR, "description": "repo-relative path, or null"},
-                "line": {**_NULLABLE_INT, "description": "a line you have seen, or null"},
-                "description": {**_STR, "description": "max 160 chars"},
-                "evidence": {**_STR, "description": "what the tool showed; never a secret value"},
-                "recommendation": _STR,
-                "kind": {"type": "string", "enum": ["present", "absent", "history"]},
-                "absent_globs": {
-                    "type": "array",
-                    "items": _STR,
-                    "description": "kind=absent only: file patterns that have no match",
-                },
-                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-            },
-            [
-                "rule_id",
-                "category",
-                "severity",
-                "file",
-                "line",
-                "description",
-                "evidence",
-                "recommendation",
-                "kind",
-                "confidence",
-            ],
-        ),
+    "record_violations": (
+        record_violations,
+        "Record all violations the last results showed, in one call. Each item is validated.",
+        _schema({"violations": {"type": "array", "minItems": 1, "items": _VIOLATION_ITEM}}, ["violations"]),
         False,
     ),
     "update_violation": (
@@ -1131,15 +1154,21 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "finish": (
         finish,
-        "End the current phase when the audit is complete.",
+        "End the current phase.",
         _schema({"summary": _STR}, ["summary"]),
         False,
     ),
 }
 
 
-def tool_names(allow_exec: bool) -> list[str]:
-    return [n for n in TOOL_DEFS if allow_exec or n != "run_tests"]
+REVIEW_ONLY = ("update_violation", "retract_violation")
+
+
+def tool_names(allow_exec: bool, phase: str = "investigation") -> list[str]:
+    names = [n for n in TOOL_DEFS if allow_exec or n != "run_tests"]
+    if phase == "investigation":
+        names = [n for n in names if n not in REVIEW_ONLY]
+    return names
 
 
 def tool_schemas(names: list[str]) -> list[dict]:
@@ -1165,7 +1194,23 @@ def _coerce(value, schema: dict):
         if "boolean" in types and v.lower() in ("true", "false"):
             return v.lower() == "true"
     if "array" in types and isinstance(value, str):
-        return [v for v in value.replace(",", " ").split() if v]
+        if value.strip().startswith(("[", "{")):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        else:
+            return [v for v in value.replace(",", " ").split() if v]
+    if "array" in types and isinstance(value, dict):
+        value = [value]
+    if "array" in types and isinstance(value, list) and "properties" in schema.get("items", {}):
+        props = schema["items"]["properties"]
+        return [
+            {k: _coerce(v, props[k]) if k in props else v for k, v in item.items()}
+            if isinstance(item, dict)
+            else item
+            for item in value
+        ]
     if "integer" in types and isinstance(value, float) and value.is_integer():
         return int(value)
     return value

@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 from auditor.llm import ToolCall, estimate_tokens
 from auditor.repo import profile_text
 from auditor.state import AuditState
+from tools import VENDORED
 
-MAX_SUMMARY_LINES = 30
+MAX_SUMMARY_LINES = 12
+MAX_LISTED_FILES = 150
 
 
 @dataclass
@@ -34,6 +36,24 @@ def summarize_call(step: int, call: ToolCall, args: dict, result: str, ok: bool)
     first = result.strip().splitlines()[0] if result.strip() else ""
     status = "" if ok else " [failed]"
     return f"s{step} {call.name}({arg_text}){status} -> {first[:80]}"
+
+
+def tracked_files_text(state: AuditState) -> str:
+    """All tracked paths for small repositories (vendored directories collapsed)."""
+    files = state.repo.files
+    if len(files) > MAX_LISTED_FILES:
+        return f"Tracked files: {len(files)} (too many to list; use list_files)."
+    shown, vendored = [], {}
+    for p in sorted(files):
+        parts = p.split("/")
+        idx = next((i for i, part in enumerate(parts[:-1]) if part in VENDORED), None)
+        if idx is None:
+            shown.append(p)
+        else:
+            d = "/".join(parts[: idx + 1]) + "/"
+            vendored[d] = vendored.get(d, 0) + 1
+    shown += [f"{d} ({n} files)" for d, n in vendored.items()]
+    return "Tracked files (complete list): " + ", ".join(shown)
 
 
 def files_seen_text(state: AuditState, limit: int = 40) -> str:
@@ -58,6 +78,7 @@ def audit_state_text(
         f"Repository: {state.repo.url}",
         "Profile:",
         *("  " + x for x in profile_text(state.repo).splitlines()),
+        tracked_files_text(state),
         "Coverage:",
     ]
     for area, status in state.coverage.items():
