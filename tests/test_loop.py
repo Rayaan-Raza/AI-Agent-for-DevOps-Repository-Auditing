@@ -284,3 +284,30 @@ def test_newest_turn_is_cut_when_too_big(state):
 def test_system_prompt_size():
     assert estimate_tokens(SYSTEM_PROMPT) < 2000
     assert estimate_tokens(tools.tool_schemas(tools.tool_names(True))) < 2600
+
+
+def test_files_without_verdict_listed_until_handled(state):
+    from auditor.context import files_without_verdict
+
+    ctx = tools.ToolContext(state=state)
+    tools.read_file(ctx, "README.md")
+    tools.inspect_workflows(ctx)
+    assert files_without_verdict(state) == [".github/workflows/ci.yml", "README.md"]
+    state.add_note("README.md: clean")
+    assert files_without_verdict(state) == [".github/workflows/ci.yml"]
+    tools.record_violations(
+        ctx,
+        [
+            {
+                "rule_id": "CI-002",
+                "category": "ci",
+                "severity": "high",
+                "file": ".github/workflows/ci.yml",
+                "line": 13,
+                "description": "d",
+                "evidence": "e",
+                "recommendation": "r",
+            }
+        ],
+    )
+    assert files_without_verdict(state) == []

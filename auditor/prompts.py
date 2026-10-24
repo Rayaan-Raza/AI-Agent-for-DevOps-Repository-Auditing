@@ -30,7 +30,10 @@ EVIDENCE RULES (precision matters: false positives cost points)
 - Report only what a tool showed. Never guess. If a check is unavailable, do not report it.
 - Missing optional file is NOT a violation when an equivalent exists: deps in requirements*.txt OR pyproject \
 OR setup.cfg OR Pipfile; lint via ruff/flake8/pylint/black/pre-commit/CI step; review guidance via \
-CONTRIBUTING, PR template, CODEOWNERS or README section; CI may be GitHub Actions or another CI file.
+CONTRIBUTING, PR template, CODEOWNERS or a README "Contributing" section; CI may be GitHub Actions or another \
+CI file. Read the README before reporting missing guidance or setup steps.
+- Version ranges with an upper bound (>=1,<2, ~=1.4, ^1.2) are properly constrained. "Unpinned" means no \
+version at all or only a lower bound (lower_only/none) in an application.
 - A lockfile is needed only for an application whose tool makes one (poetry, uv, pipenv, npm/yarn/pnpm). \
 Libraries do not need one. requirements.txt with == pins is acceptable.
 - Never report branch protection or repository settings: files cannot show them.
