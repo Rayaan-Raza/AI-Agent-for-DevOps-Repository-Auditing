@@ -24,7 +24,7 @@ def run(state, script, tmp_path=None, **cfg):
 
 
 def cover_all():
-    return [reply(call("update_coverage", area=a, status="examined", reason="checked")) for a in AREAS]
+    return [reply(call("update_coverage", areas=[a], status="examined", reason="checked")) for a in AREAS]
 
 
 def test_dynamic_investigation_records_and_finishes(state, tmp_path):
@@ -158,6 +158,27 @@ def test_unknown_tool_and_bad_args_do_not_crash(state):
     # The invented tool is never replayed to the API; a correction is sent instead.
     assert "do not exist" in llm.requests[1][-1]["content"]
     assert all("rm_rf" not in str(m.get("tool_calls", "")) for r in llm.requests for m in r)
+
+
+def test_repeat_detection(state):
+    llm = FakeLLM(
+        [
+            reply(call("read_file", path="README.md", reason="first")),
+            reply(call("read_file", path="./README.md", reason="again, other words")),
+            reply(call("read_file", path="README.md", start_line=2, reason="different range")),
+        ]
+    )
+    loop = AuditLoop(state, llm, LoopConfig(max_steps=3), Trace(None))
+    loop.run()
+    results = [r["result_preview"] for r in loop.trace.records if "tool" in r]
+    assert results[0].startswith("README.md  lines 1-3")
+    assert results[1].startswith("REPEATED CALL") and "README.md  lines 1-3" in results[1]
+    assert results[2].startswith("README.md  lines 2-3")
+    assert loop.repeats == 1
+    assert (
+        "Files already seen" in llm.requests[1][1]["content"]
+        and "README.md (all)" in llm.requests[1][1]["content"]
+    )
 
 
 def test_time_limit_skips_review(state):

@@ -83,7 +83,7 @@ def test_end_to_end_with_fake_llm(tmp_path, capsys):
                 confidence="high",
             )
         ),
-        *[reply(call("update_coverage", area=a, status="examined", reason="x")) for a in AREAS],
+        *[reply(call("update_coverage", areas=[a], status="examined", reason="x")) for a in AREAS],
         reply(call("finish", summary="done")),
         reply(call("finish", summary="reviewed")),
     ]
@@ -104,7 +104,7 @@ def test_end_to_end_with_fake_llm(tmp_path, capsys):
 def test_empty_report_when_nothing_found(tmp_path):
     src = make_git_repo(tmp_path / "src", [{"README.md": "# x\n"}])
     script = [
-        *[reply(call("update_coverage", area=a, status="not_applicable", reason="tiny")) for a in AREAS],
+        *[reply(call("update_coverage", areas=[a], status="not_applicable", reason="tiny")) for a in AREAS],
         reply(call("finish", summary="nothing")),
     ]
     out = tmp_path / "r.json"

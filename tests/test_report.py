@@ -239,13 +239,17 @@ def test_schemas_are_valid_json_schema():
 
 
 def test_state_tools(ctx):
-    assert (
-        "repository_hygiene -> examined"
-        in tools.execute(
-            ctx, "update_coverage", {"area": "repository_hygiene", "status": "examined", "reason": "x"}
-        )[0]
+    out, _, ok = tools.execute(
+        ctx, "update_coverage", {"areas": ["repository_hygiene", "ci"], "status": "examined", "reason": "x"}
     )
-    _, _, ok = tools.execute(ctx, "update_coverage", {"area": "x", "status": "examined", "reason": "x"})
+    assert ok and "repository_hygiene, ci -> examined" in out
+    assert ctx.state.coverage["ci"] == "examined"
+    # A bare string is accepted for the list.
+    out, _, ok = tools.execute(
+        ctx, "update_coverage", {"areas": "testing", "status": "not_applicable", "reason": "x"}
+    )
+    assert ok and ctx.state.coverage["testing"] == "not_applicable"
+    _, _, ok = tools.execute(ctx, "update_coverage", {"areas": ["x"], "status": "examined", "reason": "x"})
     assert not ok
     assert "Note recorded" in tools.execute(ctx, "add_note", {"text": "CI runs on push only"})[0]
     tools.execute(ctx, "finish", {"summary": "done"})

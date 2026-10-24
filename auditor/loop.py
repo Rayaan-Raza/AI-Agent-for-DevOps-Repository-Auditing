@@ -33,11 +33,11 @@ REVIEW_TOOLS = [
 
 @dataclass
 class LoopConfig:
-    max_steps: int = 40
+    max_steps: int = 50
     max_seconds: float = 1800.0
     review_steps: int = 8
-    prompt_budget: int = 5200
-    window: int = 3
+    prompt_budget: int = 4800
+    window: int = 6
     allow_exec: bool = False
     max_tool_failures: int = 3
     max_no_tool: int = 3
@@ -91,6 +91,8 @@ class AuditLoop:
         self.start = clock()
         self.ctx = toolbox.ToolContext(state=state, allow_exec=config.allow_exec)
         self.llm_calls = 0
+        self.repeats = 0
+        self.done_calls: dict[str, tuple[int, str]] = {}
 
     # ------------------------------------------------------------ helpers --
     def time_left_frac(self) -> float:
@@ -128,14 +130,45 @@ class AuditLoop:
         resp = self.llm.complete(messages, schemas)
         return resp, self.clock() - t0, n_full
 
+    def _call_key(self, name: str, raw: str) -> str | None:
+        """Identity of an investigation call (arguments without 'reason'), for repeat detection."""
+        if name not in toolbox.TOOL_DEFS or not toolbox.TOOL_DEFS[name][3]:
+            return None
+        try:
+            args = toolbox.parse_arguments(name, raw)
+        except toolbox.ToolError:
+            return None
+        args.pop("reason", None)
+        if isinstance(args.get("path"), str):
+            p = args["path"].strip().replace("\\", "/")
+            while p.startswith("./"):
+                p = p[2:]
+            args["path"] = p or "."
+        if name == "read_file" and args.get("start_line") == 1:
+            args.pop("start_line")
+        return name + json.dumps(args, sort_keys=True)
+
     def _run_calls(self, phase: str, step: int, resp, elapsed: float, allowed: list[str]) -> Turn:
         turn = Turn(step=step, calls=[], results=[], args=[], ok=[])
         for call in resp.tool_calls:
             self.ctx.step = step
+            key = self._call_key(call.name, call.arguments)
             if call.name not in allowed:
                 text, args, ok = f"ERROR: tool {call.name!r} is not available in this phase.", {}, False
+            elif key and key in self.done_calls:
+                prev_step, prev_text = self.done_calls[key]
+                self.repeats += 1
+                args = toolbox.parse_arguments(call.name, call.arguments)
+                text = (
+                    f"REPEATED CALL: you already ran this exact call at step {prev_step}. Do not repeat "
+                    "calls. Act on the result now: record_violation, add_note, update_coverage, or "
+                    f"investigate a different file or area.\nResult of step {prev_step}:\n" + prev_text[:2500]
+                )
+                ok = False
             else:
                 text, args, ok = toolbox.execute(self.ctx, call.name, call.arguments)
+                if key and ok:
+                    self.done_calls[key] = (step, text)
             turn.calls.append(call)
             turn.results.append(text)
             turn.args.append(args)
@@ -327,6 +360,7 @@ class AuditLoop:
                 "steps": steps,
                 "reviewed": reviewed,
                 "llm_calls": self.llm_calls,
+                "repeated_calls": self.repeats,
                 "elapsed_s": round(self.clock() - self.start, 1),
                 "coverage": self.state.coverage,
                 "retracted": [

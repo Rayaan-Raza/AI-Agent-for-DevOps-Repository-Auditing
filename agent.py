@@ -38,7 +38,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output", required=True, help="path of the JSON report to write")
     p.add_argument("--trace", help="path of the JSONL tool-call trace (default: <output>.trace.jsonl)")
     p.add_argument("--model", help="Groq model ID (default: LLM_MODEL or openai/gpt-oss-120b)")
-    p.add_argument("--max-steps", type=int, help="investigation step limit (default: MAX_STEPS or 40)")
+    p.add_argument("--max-steps", type=int, help="investigation step limit (default: MAX_STEPS or 50)")
     p.add_argument("--max-seconds", type=int, help="time limit in seconds (default: MAX_SECONDS or 1800)")
     p.add_argument(
         "--allow-exec",
@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None, llm_factory=None) -> int:
     model = args.model or os.environ.get("LLM_MODEL") or DEFAULT_MODEL
     effort = os.environ.get("LLM_REASONING_EFFORT") or "medium"
     config = LoopConfig(
-        max_steps=args.max_steps or env_int("MAX_STEPS", 40),
+        max_steps=args.max_steps or env_int("MAX_STEPS", 50),
         max_seconds=args.max_seconds or env_int("MAX_SECONDS", 1800),
         allow_exec=args.allow_exec,
     )

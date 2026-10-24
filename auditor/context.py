@@ -36,6 +36,20 @@ def summarize_call(step: int, call: ToolCall, args: dict, result: str, ok: bool)
     return f"s{step} {call.name}({arg_text}){status} -> {first[:80]}"
 
 
+def files_seen_text(state: AuditState, limit: int = 40) -> str:
+    parts = []
+    for path, lines in sorted(state.seen_lines.items()):
+        info = state.repo.files.get(path)
+        total = info.lines if info and info.lines else None
+        if total and len(lines) >= total:
+            parts.append(f"{path} (all)")
+        else:
+            parts.append(f"{path} ({len(lines)} lines)")
+    if len(parts) > limit:
+        parts = parts[:limit] + [f"... {len(parts) - limit} more"]
+    return ", ".join(parts)
+
+
 def audit_state_text(
     state: AuditState, step: int, max_steps: int, time_left_frac: float, older: list[str], extra: list[str]
 ) -> str:
@@ -51,6 +65,9 @@ def audit_state_text(
         lines.append(f"  {area:<22} {status}" + (f" ({reason[:80]})" if reason else ""))
     lines.append("Notes:" if state.notes else "Notes: (none)")
     lines += [f"  - {n}" for n in state.notes]
+    seen = files_seen_text(state)
+    if seen:
+        lines.append("Files already seen (do not read them again; record what they showed): " + seen)
     active = state.active_candidates()
     lines.append(f"Candidate violations ({len(active)}):")
     for c in active:
@@ -58,7 +75,7 @@ def audit_state_text(
         loc = (d["file"] or "(no file)") + (f":{d['line']}" if d["line"] else "")
         lines.append(f"  {c.id} {d['rule_id']} {d['severity']} {loc}  {d['description'][:70]}")
     if older:
-        lines.append("Older steps (results removed; use notes or call the tool again):")
+        lines.append("Older steps (results removed from context):")
         if len(older) > MAX_SUMMARY_LINES:
             lines.append(f"  ({len(older) - MAX_SUMMARY_LINES} earlier steps not shown)")
         lines += ["  " + s for s in older[-MAX_SUMMARY_LINES:]]

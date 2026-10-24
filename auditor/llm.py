@@ -130,7 +130,7 @@ class GroqClient:
         api_key: str,
         model: str = DEFAULT_MODEL,
         reasoning_effort: str | None = "medium",
-        max_completion_tokens: int = 1200,
+        max_completion_tokens: int = 1000,
         timeout: float = 90.0,
         log=None,
     ):

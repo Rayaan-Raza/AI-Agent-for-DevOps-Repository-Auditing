@@ -894,16 +894,20 @@ def add_note(ctx: ToolContext, text: str) -> str:
     return ctx.state.add_note(redact(text))
 
 
-def update_coverage(ctx: ToolContext, area: str, status: str, reason: str = "") -> str:
-    area = area.strip().lower()
-    if area not in AREAS:
-        raise ToolError(f"area must be one of {AREAS}.")
+def update_coverage(ctx: ToolContext, areas, status: str, reason: str = "") -> str:
+    if isinstance(areas, str):
+        areas = [a for a in areas.replace(",", " ").split() if a]
+    areas = [str(a).strip().lower() for a in areas]
+    bad = [a for a in areas if a not in AREAS]
+    if bad or not areas:
+        raise ToolError(f"areas must be a list of: {AREAS}.")
     if status not in AREA_STATUSES[1:]:
         raise ToolError(f"status must be one of {AREA_STATUSES[1:]}.")
-    ctx.state.coverage[area] = status
-    ctx.state.coverage_reasons[area] = " ".join(redact(reason).split())[:150]
+    for area in areas:
+        ctx.state.coverage[area] = status
+        ctx.state.coverage_reasons[area] = " ".join(redact(reason).split())[:150]
     left = ctx.state.pending_areas()
-    return f"{area} -> {status}. Areas not done: {', '.join(left) if left else 'none'}."
+    return f"{', '.join(areas)} -> {status}. Areas not done: {', '.join(left) if left else 'none'}."
 
 
 def record_violation(ctx: ToolContext, **kwargs) -> str:
@@ -1052,14 +1056,14 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "update_coverage": (
         update_coverage,
-        "Set the status of an inspection area: in_progress, examined or not_applicable.",
+        "Set the status of one or more inspection areas: in_progress, examined or not_applicable.",
         _schema(
             {
-                "area": {"type": "string", "enum": AREAS},
+                "areas": {"type": "array", "items": {"type": "string", "enum": AREAS}, "minItems": 1},
                 "status": {"type": "string", "enum": ["in_progress", "examined", "not_applicable"]},
                 "reason": _STR,
             },
-            ["area", "status", "reason"],
+            ["areas", "status", "reason"],
         ),
         False,
     ),
@@ -1160,6 +1164,8 @@ def _coerce(value, schema: dict):
             return int(v)
         if "boolean" in types and v.lower() in ("true", "false"):
             return v.lower() == "true"
+    if "array" in types and isinstance(value, str):
+        return [v for v in value.replace(",", " ").split() if v]
     if "integer" in types and isinstance(value, float) and value.is_integer():
         return int(value)
     return value
