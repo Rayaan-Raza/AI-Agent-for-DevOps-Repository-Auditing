@@ -167,8 +167,9 @@ def test_length_cutoff_retries_with_more_tokens(monkeypatch):
 
 
 def test_long_rate_limit_wait_is_configurable(monkeypatch):
-    import groq
     from types import SimpleNamespace as NS
+
+    import groq
 
     parsed = NS(
         choices=[NS(message=NS(content="", tool_calls=[]), finish_reason="stop")],
