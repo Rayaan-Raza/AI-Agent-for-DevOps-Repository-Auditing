@@ -188,7 +188,7 @@ class GroqClient:
                 raise LLMError(f"Model {self.model!r} is not available on this Groq account (404).") from e
             except groq.RateLimitError as e:
                 retry = parse_duration(e.response.headers.get("retry-after")) if e.response else 0
-                if retry > 120:
+                if retry > 300:
                     raise LLMError(
                         f"Groq rate limit: retry after {retry:.0f} s. The daily token or "
                         "request limit is probably used up."
