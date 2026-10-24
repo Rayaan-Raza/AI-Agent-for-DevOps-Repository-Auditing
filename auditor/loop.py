@@ -36,7 +36,7 @@ class LoopConfig:
     max_steps: int = 35
     max_seconds: float = 1800.0
     review_steps: int = 8
-    prompt_budget: int = 4800
+    prompt_budget: int = 4000
     window: int = 6
     allow_exec: bool = False
     max_tool_failures: int = 3
@@ -202,7 +202,7 @@ class AuditLoop:
         step = 0
         no_tool = tool_fail = 0
         finish_reminded = False
-        allowed = toolbox.tool_names(self.cfg.allow_exec)
+        allowed = toolbox.tool_names(self.cfg.allow_exec, phase="investigation")
         while True:
             if self.out_of_time():
                 return "time", step

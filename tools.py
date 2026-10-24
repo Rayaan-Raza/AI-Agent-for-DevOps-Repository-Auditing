@@ -976,7 +976,7 @@ def update_violation(ctx: ToolContext, id: str, **changes) -> str:
     return f"Updated {c.id}." + ("\nWARNING: " + " ".join(warnings) if warnings else "")
 
 
-def retract_violation(ctx: ToolContext, id: str, reason: str) -> str:
+def retract_violation(ctx: ToolContext, id: str, reason: str = "") -> str:
     c = ctx.state.get_candidate(id)
     if c is None or c.retracted:
         raise ToolError(f"No active violation {id!r}.")
@@ -992,7 +992,7 @@ def finish(ctx: ToolContext, summary: str = "") -> str:
 
 # ------------------------------------------------------------ registry ---
 
-_REASON = {"type": "string", "description": "One sentence: why you call this tool now."}
+_REASON = {"type": "string", "description": "Why you call this tool (one sentence)."}
 _STR = {"type": "string"}
 _INT = {"type": "integer"}
 _BOOL = {"type": "boolean"}
@@ -1008,20 +1008,16 @@ def _schema(props: dict, required: list[str]) -> dict:
 _VIOLATION_ITEM = {
     "type": "object",
     "properties": {
-        "rule_id": {**_STR, "description": "e.g. SEC-001; the prefix must match the category"},
+        "rule_id": {**_STR, "description": "e.g. SEC-001"},
         "category": {"type": "string", "enum": list(CATEGORIES)},
         "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-        "file": {**_NULLABLE_STR, "description": "repo-relative path, or null"},
-        "line": {**_NULLABLE_INT, "description": "a line you have seen, or null"},
-        "description": {**_STR, "description": "max 160 chars"},
-        "evidence": {**_STR, "description": "what the tool showed; never a secret value"},
+        "file": _NULLABLE_STR,
+        "line": _NULLABLE_INT,
+        "description": _STR,
+        "evidence": _STR,
         "recommendation": _STR,
         "kind": {"type": "string", "enum": ["present", "absent", "history"]},
-        "absent_globs": {
-            "type": "array",
-            "items": _STR,
-            "description": "kind=absent: patterns with no match",
-        },
+        "absent_globs": {"type": "array", "items": _STR},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
     },
     "required": ["rule_id", "category", "severity", "description", "evidence", "recommendation"],
@@ -1032,7 +1028,7 @@ _VIOLATION_ITEM = {
 TOOL_DEFS: dict[str, tuple] = {
     "list_files": (
         list_files,
-        "List tracked files with size and line count. Deep or vendored directories show as one line.",
+        "List tracked files with size and line count.",
         _schema(
             {
                 "path": _STR,
@@ -1046,14 +1042,13 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "read_file": (
         read_file,
-        "Read a text file with line numbers (max 200 lines per call). Secrets show as <REDACTED:...>.",
+        "Read a text file with line numbers (max 200 lines). Secrets show as <REDACTED:...>.",
         _schema({"path": _STR, "start_line": _INT, "end_line": _INT, "reason": _REASON}, ["path", "reason"]),
         True,
     ),
     "search_code": (
         search_code,
-        "Regex search over tracked text files. Returns file:line: text. Skips vendored dirs unless "
-        "path_glob names them.",
+        "Regex search of file contents and paths. Returns file:line: text.",
         _schema(
             {
                 "pattern": _STR,
@@ -1068,8 +1063,7 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "git_log": (
         git_log,
-        "Commit history: hash, date, author, subject, changed files. search=TEXT finds commits that "
-        "add or remove TEXT (git log -S). show_patch=true shows diffs.",
+        "Commit history with changed files. search=TEXT: commits that add or remove TEXT. show_patch: diffs.",
         _schema(
             {"max_count": _INT, "path": _STR, "search": _STR, "show_patch": _BOOL, "reason": _REASON},
             ["reason"],
@@ -1078,29 +1072,26 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "inspect_workflows": (
         inspect_workflows,
-        "Facts about GitHub Actions workflows with line numbers: triggers, permissions, jobs, steps, "
-        "action refs (sha/tag/branch), with/env values, secrets used, untrusted-input expressions.",
+        "GitHub Actions facts with line numbers: triggers, permissions, steps, action refs, secrets, "
+        "untrusted expressions.",
         _schema({"path": _STR, "reason": _REASON}, ["reason"]),
         True,
     ),
     "inspect_dependencies": (
         inspect_dependencies,
-        "Parse dependency manifests: each dependency with its constraint type (exact, range, "
-        "lower_only, none, url_or_path), lockfiles present, conflicting constraints.",
+        "Dependencies with constraint type (exact/range/lower_only/none), lockfiles, conflicts.",
         _schema({"reason": _REASON}, ["reason"]),
         True,
     ),
     "git_tracked_ignored": (
         git_tracked_ignored,
-        "Tracked files that match .gitignore, and tracked files that match common temporary, local "
-        "or secret file patterns.",
+        "Tracked files that match .gitignore or common temp/local/secret patterns.",
         _schema({"reason": _REASON}, ["reason"]),
         True,
     ),
     "run_ruff": (
         run_ruff,
-        "Run the ruff linter (static, does not execute code): issue counts by rule and the first "
-        "issues. Tells if the repository has a ruff config.",
+        "Static lint with ruff (does not run code). Counts by rule.",
         _schema({"path": _STR, "reason": _REASON}, ["reason"]),
         True,
     ),
@@ -1112,13 +1103,13 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "add_note": (
         add_note,
-        "Keep a short fact (max 200 chars). Old tool results leave your context; notes stay.",
+        "Keep a short fact that is not a violation.",
         _schema({"text": _STR}, ["text"]),
         False,
     ),
     "update_coverage": (
         update_coverage,
-        "Set the status of one or more inspection areas: in_progress, examined or not_applicable.",
+        "Set the status of inspection areas.",
         _schema(
             {
                 "areas": {"type": "array", "items": {"type": "string", "enum": AREAS}, "minItems": 1},
@@ -1131,8 +1122,7 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "record_violations": (
         record_violations,
-        "Record one or more violations (all that the last results showed) in one call. Python validates "
-        "each item and can reject it.",
+        "Record all violations the last results showed, in one call. Each item is validated.",
         _schema({"violations": {"type": "array", "minItems": 1, "items": _VIOLATION_ITEM}}, ["violations"]),
         False,
     ),
@@ -1164,15 +1154,21 @@ TOOL_DEFS: dict[str, tuple] = {
     ),
     "finish": (
         finish,
-        "End the current phase when the audit is complete.",
+        "End the current phase.",
         _schema({"summary": _STR}, ["summary"]),
         False,
     ),
 }
 
 
-def tool_names(allow_exec: bool) -> list[str]:
-    return [n for n in TOOL_DEFS if allow_exec or n != "run_tests"]
+REVIEW_ONLY = ("update_violation", "retract_violation")
+
+
+def tool_names(allow_exec: bool, phase: str = "investigation") -> list[str]:
+    names = [n for n in TOOL_DEFS if allow_exec or n != "run_tests"]
+    if phase == "investigation":
+        names = [n for n in names if n not in REVIEW_ONLY]
+    return names
 
 
 def tool_schemas(names: list[str]) -> list[dict]:
