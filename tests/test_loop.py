@@ -2,7 +2,7 @@ import pytest
 
 import tools
 from auditor.context import Turn, build_messages
-from auditor.llm import LLMError, ToolCall, ToolUseFailed, estimate_tokens
+from auditor.llm import ToolCall, ToolUseFailed, estimate_tokens
 from auditor.loop import AuditLoop, LoopConfig, Trace
 from auditor.prompts import SYSTEM_PROMPT
 from auditor.state import AREAS, AuditState
@@ -137,9 +137,32 @@ def test_tool_use_failed_recovery(state):
     assert any(r.get("event") == "tool_use_failed" for r in trace.records)
 
 
-def test_tool_use_failed_too_often(state):
-    with pytest.raises(LLMError):
-        run(state, [ToolUseFailed("x")] * 5)
+def test_tool_use_failed_too_often_keeps_work(state):
+    script = [
+        reply(call("read_file", path="app/config.py", reason="r")),
+        reply(
+            call(
+                "record_violation",
+                rule_id="SEC-001",
+                category="security",
+                severity="critical",
+                file="app/config.py",
+                line=4,
+                description="d",
+                evidence="e",
+                recommendation="r",
+                kind="present",
+                confidence="high",
+            )
+        ),
+        *[ToolUseFailed("x", failed_generation="<bad>")] * 4,
+        reply(call("finish", summary="reviewed")),
+    ]
+    result, llm, trace = run(state, script)
+    assert result.stop_reason == "tool_failures" and result.reviewed
+    assert [c.data["rule_id"] for c in state.active_candidates()] == ["SEC-001"]
+    assert "at most 2 items" in llm.requests[4][-1]["content"]
+    assert any(r.get("failed_generation") == "<bad>" for r in trace.records)
 
 
 def test_no_tool_calls_three_times_stops(state):
