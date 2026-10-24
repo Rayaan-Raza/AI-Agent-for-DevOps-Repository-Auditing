@@ -1,6 +1,5 @@
 # DevOps Repository Auditing Agent
 
-This document is written in ASD-STE100 Simplified Technical English (STE).
 
 This agent examines a public GitHub repository. It finds DevOps best-practice violations and writes a JSON report.
 An LLM selects each inspection tool from the results of the tools before it. The agent does not use a fixed checklist.
