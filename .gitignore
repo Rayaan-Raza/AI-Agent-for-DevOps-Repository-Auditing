@@ -22,3 +22,6 @@ report.json
 *.trace.jsonl
 trace.jsonl
 eval/results/
+
+# Self-evaluation build output
+eval/repos/
