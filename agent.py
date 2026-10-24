@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None, llm_factory=None) -> int:
         return 4
 
     model = args.model or os.environ.get("LLM_MODEL") or DEFAULT_MODEL
-    effort = os.environ.get("LLM_REASONING_EFFORT") or "medium"
+    effort = os.environ.get("LLM_REASONING_EFFORT") or "low"
     config = LoopConfig(
         max_steps=args.max_steps or env_int("MAX_STEPS", 35),
         max_seconds=args.max_seconds or env_int("MAX_SECONDS", 1800),

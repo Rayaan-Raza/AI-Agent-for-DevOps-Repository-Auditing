@@ -358,3 +358,11 @@ def test_search_code_glob_only_lists_files(ctx):
 def test_inspect_workflows_accepts_directory(ctx):
     assert "trigger: push" in tools.inspect_workflows(ctx, ".")
     assert "trigger: push" in tools.inspect_workflows(ctx, ".github/workflows")
+
+
+def test_secret_footer_in_read_and_search(ctx):
+    out = tools.read_file(ctx, "app/config.py")
+    assert "[Secret values redacted at: line 4 stripe_key real-looking]" in out
+    out = tools.search_code(ctx, "PASSWORD", path_glob=".env")
+    assert "[Secret values redacted at: .env:1 generic_secret real-looking]" in out
+    assert "Secret values" not in tools.read_file(ctx, "README.md")

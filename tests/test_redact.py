@@ -39,7 +39,7 @@ def test_long_base64_line_redacted():
 def test_quoted_assignment_in_code():
     out = redact('API_KEY = "abc123def456"', path="app/config.py")
     assert "abc123def456" not in out
-    assert 'API_KEY = "<REDACTED:generic_secret len=12>"' == out
+    assert 'API_KEY = "<REDACTED:generic_secret len=12 real-looking>"' == out
 
 
 def test_json_style_and_placeholder_hint():
@@ -68,7 +68,7 @@ def test_references_not_redacted():
 def test_url_credentials():
     out = redact("postgres://admin:s3cretpw@db.local:5432/app")
     assert "s3cretpw" not in out
-    assert "admin:<REDACTED:url_password>@db.local" in out
+    assert "admin:<REDACTED:url_password real-looking>@db.local" in out
 
 
 def test_runtime_secret_and_obj():
@@ -81,3 +81,10 @@ def test_empty_and_plain_text_unchanged():
     assert redact("") == ""
     plain = "def add(a, b):\n    return a + b\n"
     assert redact(plain, path="m.py") == plain
+
+
+def test_hints_on_every_redaction():
+    assert redact('k = "AKIAQ3XK7PLM2RTV9WNB"', path="a.py") == 'k = "<REDACTED:aws_access_key real-looking>"'
+    assert "placeholder-like" in redact('k = "AKIAIOSFODNN7EXAMPLE"', path="a.py")
+    assert "url_password real-looking" in redact("postgres://u:Pr0dPassw0rd2024@h/db")
+    assert "placeholder-like" in redact("SECRET_KEY=changeme", path=".env")
