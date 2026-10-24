@@ -27,7 +27,7 @@ def test_private_key_block():
     text = "a\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nabc\n-----END RSA PRIVATE KEY-----\nb"
     out = redact(text)
     assert "MIIEow" not in out
-    assert out.startswith("a\n<REDACTED:private_key>")
+    assert out.startswith("a\n<REDACTED:private_key real-looking>")
     assert out.endswith("\nb")
 
 
