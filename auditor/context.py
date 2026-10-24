@@ -56,6 +56,14 @@ def tracked_files_text(state: AuditState) -> str:
     return "Tracked files (complete list): " + ", ".join(shown)
 
 
+def files_without_verdict(state: AuditState, limit: int = 12) -> list[str]:
+    """Files the LLM has seen that no violation names and no note mentions."""
+    named = {c.data["file"] for c in state.active_candidates() if c.data.get("file")}
+    notes = " ".join(state.notes)
+    out = [p for p in sorted(state.seen_lines) if p not in named and p not in notes]
+    return out[:limit]
+
+
 def files_seen_text(state: AuditState, limit: int = 40) -> str:
     parts = []
     for path, lines in sorted(state.seen_lines.items()):
@@ -89,6 +97,12 @@ def audit_state_text(
     seen = files_seen_text(state)
     if seen:
         lines.append("Files already seen (do not read them again; record what they showed): " + seen)
+    pending = files_without_verdict(state)
+    if pending:
+        lines.append(
+            "Files seen with NO verdict yet (record their violations, or add_note '<path>: clean'): "
+            + ", ".join(pending)
+        )
     active = state.active_candidates()
     lines.append(f"Candidate violations ({len(active)}):")
     for c in active:
