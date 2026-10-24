@@ -102,7 +102,9 @@ def main(argv: list[str] | None = None, llm_factory=None) -> int:
 
     repo = None
     trace = None
+    state = None
     t0 = time.monotonic()
+    report_url = args.repo if args.allow_local else normalize_url(args.repo)
     try:
         llm = (
             llm_factory()
@@ -121,7 +123,6 @@ def main(argv: list[str] | None = None, llm_factory=None) -> int:
                 f"warning: investigation stopped early ({result.stop_reason}); the report has the "
                 "findings recorded so far."
             )
-        report_url = args.repo if args.allow_local else normalize_url(args.repo)
         report = build_report(state, report_url, drop_low_confidence=not args.keep_low_confidence)
         try:
             write_report(report, args.output)
@@ -141,6 +142,17 @@ def main(argv: list[str] | None = None, llm_factory=None) -> int:
         return 4
     except LLMError as e:
         log(f"error: LLM failure: {e}")
+        if state is not None and state.active_candidates():
+            # The inspection is incomplete, but keep the validated findings so the work is not lost.
+            try:
+                report = build_report(state, report_url, drop_low_confidence=not args.keep_low_confidence)
+                write_report(report, args.output)
+                log(
+                    f"partial report written: {args.output} ({len(report['violations'])} violations). "
+                    "The inspection did not complete."
+                )
+            except (OSError, ValueError) as write_error:
+                log(f"error: cannot write the partial report: {write_error}")
         return 5
     except KeyboardInterrupt:
         log("interrupted.")

@@ -7,6 +7,26 @@ from auditor.state import AuditState
 from tests.conftest import SAMPLE_COMMITS
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ('DATA_DIR = "C:/Users/jdoe/projects/data"', "line 1 C:/Users/jdoe/projects/data"),
+        (r'p = "C:\Users\bob\venv"', r"line 1 C:\Users\bob\venv"),
+        ('p = "/Users/mkhan/.venvs/x/bin/python"', "line 1 /Users/mkhan/.venvs/x/bin/python"),
+        ('x = "/home/ubuntu/app"', "line 1 /home/ubuntu/app"),
+        ("#!/usr/bin/env python", None),
+        ('url = "https://x.com/home/a/b"', None),
+        ("cd /home", None),
+    ],
+)
+def test_facts_footer_paths(text, expected):
+    out = tools.facts_footer([("line 1", text)])
+    if expected is None:
+        assert out == ""
+    else:
+        assert out == f"\n[Absolute user paths at: {expected}]"
+
+
 @pytest.fixture
 def ctx(git_repo_factory):
     repo = git_repo_factory(SAMPLE_COMMITS)

@@ -99,7 +99,8 @@ The agent runs without interactive prompts. It writes two files:
 | 5 | LLM API failure (rate limit not cleared, server error, malformed tool calls continued) |
 | 6 | The agent cannot write the report |
 
-If the exit code is not 0, the agent writes an error message to stderr. It does not write a report.
+If the exit code is not 0, the agent writes an error message to stderr.
+Exception: if the LLM API fails after the agent recorded violations (exit code 5), the agent writes a partial report with the validated violations. The message on stderr says that the report is partial.
 
 ### 4.3 Run time
 

@@ -127,16 +127,32 @@ def read_lines(ctx: ToolContext, rel: str) -> list[str]:
 _REDACTION = re.compile(r"<REDACTED:([a-z_]+)(?: len=\d+)?( placeholder-like| real-looking)?>")
 
 
-def secrets_footer(items: list[tuple[str, str]]) -> str:
-    """List (location, text) pairs that contain redacted secrets, so the LLM can record them directly."""
-    found = []
+_ABS_PATH = re.compile(
+    r"(?<![\w/:])(?:[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/][^\s'\"]+"
+    r"|/(?:Users|home)/[A-Za-z0-9._-]+/[^\s'\"]*)"
+)
+
+
+def has_fact(text: str) -> bool:
+    return "<REDACTED:" in text or bool(_ABS_PATH.search(text))
+
+
+def facts_footer(items: list[tuple[str, str]]) -> str:
+    """List where secrets were redacted and where machine-specific paths appear (facts, not findings)."""
+    secrets, paths = [], []
     for loc, text in items:
         for kind, hint in _REDACTION.findall(text):
-            found.append(f"{loc} {kind}{hint or ''}")
-    if not found:
-        return ""
-    more = f" (+{len(found) - 12} more)" if len(found) > 12 else ""
-    return "\n[Secret values redacted at: " + "; ".join(found[:12]) + more + "]"
+            secrets.append(f"{loc} {kind}{hint or ''}")
+        for m in _ABS_PATH.findall(text):
+            paths.append(f"{loc} {m[:60]}")
+    out = ""
+    if secrets:
+        more = f" (+{len(secrets) - 12} more)" if len(secrets) > 12 else ""
+        out += "\n[Secret values redacted at: " + "; ".join(secrets[:12]) + more + "]"
+    if paths:
+        more = f" (+{len(paths) - 8} more)" if len(paths) > 8 else ""
+        out += "\n[Absolute user paths at: " + "; ".join(paths[:8]) + more + "]"
+    return out
 
 
 def human_size(n: int) -> str:
@@ -208,7 +224,7 @@ def read_file(ctx: ToolContext, path: str, start_line: int = 1, end_line: int | 
         if len(text) > 500:
             text = text[:500] + " [... line cut]"
         row = f"{n:>{width}}  {text}"
-        if "<REDACTED:" in text:
+        if has_fact(text):
             secret_rows.append((n, text))
         if used + len(row) > MAX_RESULT_CHARS - 200 and out:
             break
@@ -217,7 +233,7 @@ def read_file(ctx: ToolContext, path: str, start_line: int = 1, end_line: int | 
         shown_end = n
     ctx.state.mark_seen(rel, range(start, shown_end + 1))
     header = f"{rel}  lines {start}-{shown_end} of {total}"
-    footer = secrets_footer([(f"line {n}", t) for n, t in secret_rows if n <= shown_end])
+    footer = facts_footer([(f"line {n}", t) for n, t in secret_rows if n <= shown_end])
     if shown_end < total:
         footer += f"\n[More lines: call read_file with start_line={shown_end + 1}.]"
     return header + "\n" + "\n".join(out) + footer
@@ -289,7 +305,7 @@ def search_code(
             if len(hits) < max_results:
                 text = redact(line.strip(), path=rel)[:LINE_TEXT_LIMIT]
                 hits.append(f"{rel}:{n}: {text}")
-                if "<REDACTED:" in text:
+                if has_fact(text):
                     secret_hits.append((f"{rel}:{n}", text))
                 ctx.state.mark_seen(rel, [n])
     if total == 0:
@@ -302,7 +318,7 @@ def search_code(
     if timeouts:
         summary += f"; {timeouts} lines timed out"
     body = path_line + "\nCONTENT matches:\n" + "\n".join(hits) + "\n" + summary + "."
-    return clip(body + secrets_footer(secret_hits))
+    return clip(body + facts_footer(secret_hits))
 
 
 def git_log(

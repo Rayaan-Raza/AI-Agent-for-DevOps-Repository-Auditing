@@ -49,6 +49,36 @@ def test_clone_failure_exit_3(tmp_path):
     assert code == 3
 
 
+def test_llm_failure_mid_run_keeps_partial_report(tmp_path, capsys):
+    src = make_git_repo(tmp_path / "src", SAMPLE_COMMITS)
+    out = tmp_path / "r.json"
+    script = [
+        reply(call("read_file", path=".env", reason="r")),
+        reply(
+            call(
+                "record_violation",
+                rule_id="SEC-002",
+                category="security",
+                severity="high",
+                file=".env",
+                line=1,
+                description="Committed .env",
+                evidence="literal password",
+                recommendation="Remove it",
+                kind="present",
+                confidence="high",
+            )
+        ),
+        LLMError("Groq rate limit: retry after 729 s."),
+    ]
+    code = agent.main(
+        ["--repo", str(src), "--output", str(out), "--allow-local"], llm_factory=lambda: FakeLLM(script)
+    )
+    assert code == 5
+    assert json.loads(out.read_text())["violations"][0]["rule_id"] == "SEC-002"
+    assert "partial report written" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("exc,code", [(LLMAuthError("bad key"), 4), (LLMError("down"), 5)])
 def test_llm_errors(tmp_path, exc, code):
     src = make_git_repo(tmp_path / "src", SAMPLE_COMMITS)
