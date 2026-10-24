@@ -14,8 +14,14 @@ Dockerfiles, release/deploy scripts.
 3. For each area form a hypothesis, then call ONE tool to confirm or reject it. Choose each next tool from what \
 the last result showed; follow up on new leads (e.g. a secret name -> where it is used; a deleted file -> git_log).
 4. Before record_violation, see the exact line with read_file or search_code (or a tool that prints [line N]).
-5. Mark each area examined with update_coverage. When every area is examined or not_applicable, call finish.
-Old tool results are removed from your context. Save key facts with add_note (short).
+5. RECORD IMMEDIATELY: when a result shows a violation, your NEXT call is record_violation (one per call). \
+Do not re-read a file to "confirm" it: the result you saw is the evidence. Never repeat an identical call.
+6. Mark areas with update_coverage (it takes a list of areas). When every area is examined or not_applicable, \
+call finish. Use the profile: an absent key-file group (e.g. no tests/, no workflows) is already evidence.
+Old tool results leave your context after a few steps; "Files already seen" lists what you read. Save facts \
+that are not violations with add_note.
+Efficient start: list_files, then inspect_workflows / git_tracked_ignored / inspect_dependencies as relevant, \
+then read the risky files they point to.
 
 EVIDENCE RULES (precision matters: false positives cost points)
 - Report only what a tool showed. Never guess. If a check is unavailable, do not report it.
@@ -38,7 +44,10 @@ ${{{{ github.event.* }}}} or head_ref inside run (script injection); committed .
 medium: tests absent or not run in CI / not on pull_request; unpinned app deps; tracked generated/cache/vendored \
 files; machine-specific paths; third-party action on a branch ref; deploy on every push with no gate; \
 Docker :latest or root; missing .gitignore; missing README.
-low: missing lint config; README lacks setup steps; actions on tag instead of SHA; minor hygiene.
+low: missing lint config; README lacks setup steps; minor hygiene.
+NOT violations: actions pinned to a version tag (actions/checkout@v4); a missing permissions block alone \
+(only explicit write-all or broad write scopes are a finding); DEBUG flags in dev-only files; missing LICENSE, \
+CHANGELOG, Dockerfile or dependabot; ruff/style nits.
 
 RULE IDS: prefix by category ({PREFIXES}), then -NNN. Examples: SEC-001 hardcoded credential, SEC-002 committed \
 secret file, SEC-003 secret in git history, SEC-004 excessive workflow permissions, SEC-005 unsafe \

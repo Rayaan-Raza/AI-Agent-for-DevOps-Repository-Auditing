@@ -39,3 +39,4 @@ select = ["E", "F", "W", "I", "B", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "auditor/prompts.py" = ["E501"]
+"eval/*.py" = ["E501"]
