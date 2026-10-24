@@ -141,6 +141,7 @@ def test_short_rate_limit_then_success(monkeypatch):
     assert out.tool_calls[0].name == "finish" and out.reasoning == "thinking"
     assert out.usage == {"prompt": 10, "completion": 5}
     assert client.limiter.remaining_tokens == 7000
+    assert client.calibration < 1.0  # real usage was below the estimate
 
 
 def test_reasoning_effort_only_for_supported_models():
