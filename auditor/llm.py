@@ -46,6 +46,7 @@ class LLMResponse:
     tool_calls: list[ToolCall]
     usage: dict = field(default_factory=dict)
     reasoning: str = ""
+    finish_reason: str = ""
 
 
 class LLMClient(Protocol):
@@ -150,19 +151,27 @@ class GroqClient:
         self.calibration = 1.0  # real prompt tokens / estimated prompt tokens
 
     def complete(self, messages: list[dict], tools: list[dict]) -> LLMResponse:
+        resp = self._request(messages, tools, self.max_completion_tokens)
+        if resp.finish_reason == "length" and not resp.tool_calls:
+            # Reasoning used the whole completion budget before the tool call. Try once with more room.
+            self.log("completion cut at the token limit; retrying with a larger limit")
+            resp = self._request(messages, tools, min(3 * self.max_completion_tokens, 4000))
+        return resp
+
+    def _request(self, messages: list[dict], tools: list[dict], max_tokens: int) -> LLMResponse:
         groq = self._groq
         kwargs = dict(
             model=self.model,
             messages=messages,
             tools=tools,
             tool_choice="auto",
-            max_completion_tokens=self.max_completion_tokens,
+            max_completion_tokens=max_tokens,
             temperature=0.3,
         )
         if self.reasoning_effort:
             kwargs["reasoning_effort"] = self.reasoning_effort
         estimated_prompt = estimate_tokens(messages) + estimate_tokens(tools)
-        needed = int(estimated_prompt * self.calibration * 1.1) + self.max_completion_tokens
+        needed = int(estimated_prompt * self.calibration * 1.1) + max_tokens
 
         for attempt in range(5):
             self.limiter.wait_for(needed)
@@ -227,4 +236,5 @@ class GroqClient:
             tool_calls=calls,
             usage=usage,
             reasoning=getattr(msg, "reasoning", None) or "",
+            finish_reason=getattr(choice, "finish_reason", None) or "",
         )

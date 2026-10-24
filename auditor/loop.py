@@ -243,6 +243,9 @@ class AuditLoop:
                         "phase": "investigation",
                         "event": "no_tool_call",
                         "content": resp.content[:300],
+                        "finish_reason": getattr(resp, "finish_reason", ""),
+                        "reasoning": (resp.reasoning or "")[:600],
+                        "tokens": resp.usage,
                     }
                 )
                 if no_tool >= self.cfg.max_no_tool:
