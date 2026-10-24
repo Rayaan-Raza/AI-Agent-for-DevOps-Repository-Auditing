@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Tools
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Local settings and secrets
+.env
+.idea/
+.vscode/
+
+# Agent output (sample_report.json is committed on purpose)
+report.json
+*.trace.jsonl
+trace.jsonl
+eval/results/

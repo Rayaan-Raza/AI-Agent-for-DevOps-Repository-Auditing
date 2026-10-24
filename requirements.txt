@@ -1,0 +1,7 @@
+groq>=0.30,<2
+python-dotenv>=1.0,<2
+PyYAML>=6.0,<7
+regex>=2024.4.16
+jsonschema>=4.21,<5
+ruff>=0.6
+pytest>=8.0

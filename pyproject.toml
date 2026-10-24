@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devops-audit-agent"
+version = "0.1.0"
+description = "LLM agent that audits GitHub repositories for DevOps best-practice violations"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "groq>=0.30,<2",
+    "python-dotenv>=1.0,<2",
+    "PyYAML>=6.0,<7",
+    "regex>=2024.4.16",
+    "jsonschema>=4.21,<5",
+    "ruff>=0.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools]
+py-modules = ["agent", "tools"]
+packages = ["auditor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: needs GROQ_API_KEY and network access"]
+addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["eval/repos"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
