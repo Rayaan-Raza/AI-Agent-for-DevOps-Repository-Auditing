@@ -25,3 +25,4 @@ eval/results/
 
 # Self-evaluation build output
 eval/repos/
+eval/*.log
