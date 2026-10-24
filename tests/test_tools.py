@@ -114,7 +114,7 @@ def test_search_code_glob_and_case(ctx):
 
 
 def test_search_code_no_match_and_bad_regex(ctx):
-    assert "No matches" in tools.search_code(ctx, "zzz_not_here")
+    assert "No CONTENT matches" in tools.search_code(ctx, "zzz_not_here")
     with pytest.raises(tools.ToolError, match="Invalid regular expression"):
         tools.search_code(ctx, "(unclosed")
 
@@ -122,13 +122,13 @@ def test_search_code_no_match_and_bad_regex(ctx):
 def test_search_code_catastrophic_pattern_does_not_hang(git_repo_factory):
     c = make_ctx(git_repo_factory, {"a.txt": "a" * 5000 + "!\n"})
     out = tools.search_code(c, r"(a+)+$")
-    assert "timed out" in out or "No matches" in out
+    assert "timed out" in out or "No CONTENT matches" in out
 
 
 def test_search_code_max_results(git_repo_factory):
     c = make_ctx(git_repo_factory, {"a.txt": "hit\n" * 30})
     out = tools.search_code(c, "hit", max_results=5)
-    assert "30 matches in 1 files (first 5 shown)" in out
+    assert "30 content matches in 1 files (first 5 shown)" in out
 
 
 # --- git_log -----------------------------------------------------------------
@@ -338,3 +338,23 @@ def test_tools_do_not_modify_clone(ctx):
         ["git", "status", "--porcelain", "--ignored"], cwd=ctx.root, capture_output=True, text=True
     ).stdout
     assert status.strip() == ""
+
+
+def test_search_code_reports_path_matches(ctx):
+    out = tools.search_code(ctx, r"README|\.gitignore")
+    assert "PATH matches: .gitignore, README.md" in out
+    out = tools.search_code(ctx, "Dockerfile")
+    assert "No tracked file PATH matches." in out and "No CONTENT matches" in out
+
+
+def test_search_code_glob_only_lists_files(ctx):
+    out = tools.search_code(ctx, "", path_glob="**/*.py")
+    assert out == "2 tracked files match '**/*.py': app/config.py, app/main.py"
+    assert "0 tracked files match" in tools.search_code(ctx, "", path_glob="*.toml")
+    with pytest.raises(tools.ToolError):
+        tools.search_code(ctx, "")
+
+
+def test_inspect_workflows_accepts_directory(ctx):
+    assert "trigger: push" in tools.inspect_workflows(ctx, ".")
+    assert "trigger: push" in tools.inspect_workflows(ctx, ".github/workflows")

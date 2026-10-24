@@ -213,12 +213,35 @@ def search_code(
     ignore_case: bool = False,
     max_results: int = 40,
 ) -> str:
-    if not pattern or len(pattern) > 200:
-        raise ToolError("pattern must have 1 to 200 characters.")
+    if len(pattern or "") > 200:
+        raise ToolError("pattern must have at most 200 characters.")
+    if not pattern:
+        if not path_glob:
+            raise ToolError("Give a pattern, or a path_glob to list the files that match it.")
+        listed = sorted(p for p in ctx.repo.files if glob_match(p, path_glob))
+        if not listed:
+            return f"0 tracked files match {path_glob!r}."
+        more = " ..." if len(listed) > 60 else ""
+        return f"{len(listed)} tracked files match {path_glob!r}: " + ", ".join(listed[:60]) + more
     try:
         rx = regex.compile(pattern, regex.IGNORECASE if ignore_case else 0)
     except regex.error as e:
         raise ToolError(f"Invalid regular expression: {e}") from None
+    path_hits = []
+    for rel in sorted(ctx.repo.files):
+        if path_glob and not glob_match(rel, path_glob):
+            continue
+        try:
+            if rx.search(rel, timeout=0.2):
+                path_hits.append(rel)
+        except TimeoutError:
+            pass
+    if path_hits:
+        path_line = "Tracked files whose PATH matches: " + ", ".join(path_hits[:20])
+        if len(path_hits) > 20:
+            path_line += f" (+{len(path_hits) - 20} more)"
+    else:
+        path_line = "No tracked file PATH matches."
     max_results = max(1, min(int(max_results), 100))
     deadline = time.monotonic() + 20
     hits, total, files_with_hits, timeouts = [], 0, set(), 0
@@ -252,13 +275,14 @@ def search_code(
                 ctx.state.mark_seen(rel, [n])
     if total == 0:
         scope = f" in files matching {path_glob!r}" if path_glob else ""
-        return f"No matches for {pattern!r}{scope}." + (f" ({timeouts} lines timed out.)" if timeouts else "")
-    summary = f"{total} matches in {len(files_with_hits)} files"
+        timed = f" ({timeouts} lines timed out.)" if timeouts else ""
+        return f"{path_line}\nNo CONTENT matches for {pattern!r}{scope}.{timed}"
+    summary = f"{total} content matches in {len(files_with_hits)} files"
     if total > max_results:
         summary += f" (first {max_results} shown)"
     if timeouts:
         summary += f"; {timeouts} lines timed out"
-    return clip("\n".join(hits) + "\n" + summary + ".")
+    return clip(path_line + "\nCONTENT matches:\n" + "\n".join(hits) + "\n" + summary + ".")
 
 
 def git_log(
@@ -462,7 +486,7 @@ def _describe_workflow(rel: str, text: str, seen: set[int]) -> list[str]:
 
 
 def inspect_workflows(ctx: ToolContext, path: str | None = None) -> str:
-    if path:
+    if path and not safe_path(ctx, path, must_exist=False)[1].is_dir():
         rel, _ = safe_path(ctx, path)
         targets = [rel]
     else:
@@ -924,6 +948,20 @@ def record_violation(ctx: ToolContext, **kwargs) -> str:
     return msg
 
 
+def record_violations(ctx: ToolContext, violations: list) -> str:
+    if not violations:
+        raise ToolError("violations must be a non-empty list.")
+    out = []
+    for i, item in enumerate(violations[:10], 1):
+        if not isinstance(item, dict):
+            out.append(f"item {i}: REJECTED: each item must be an object.")
+            continue
+        out.append(f"item {i}: " + record_violation(ctx, **item))
+    if len(violations) > 10:
+        out.append("Only the first 10 items were processed. Send the rest in a new call.")
+    return "\n".join(out)
+
+
 def update_violation(ctx: ToolContext, id: str, **changes) -> str:
     from auditor.report import validate_candidate
 
@@ -963,7 +1001,31 @@ _NULLABLE_INT = {"type": ["integer", "null"]}
 
 
 def _schema(props: dict, required: list[str]) -> dict:
-    return {"type": "object", "properties": props, "required": required}
+    # "reason" is requested by the prompt but not required: Groq rejects a call that misses a required field.
+    return {"type": "object", "properties": props, "required": [r for r in required if r != "reason"]}
+
+
+_VIOLATION_ITEM = {
+    "type": "object",
+    "properties": {
+        "rule_id": {**_STR, "description": "e.g. SEC-001; the prefix must match the category"},
+        "category": {"type": "string", "enum": list(CATEGORIES)},
+        "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+        "file": {**_NULLABLE_STR, "description": "repo-relative path, or null"},
+        "line": {**_NULLABLE_INT, "description": "a line you have seen, or null"},
+        "description": {**_STR, "description": "max 160 chars"},
+        "evidence": {**_STR, "description": "what the tool showed; never a secret value"},
+        "recommendation": _STR,
+        "kind": {"type": "string", "enum": ["present", "absent", "history"]},
+        "absent_globs": {
+            "type": "array",
+            "items": _STR,
+            "description": "kind=absent: patterns with no match",
+        },
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    },
+    "required": ["rule_id", "category", "severity", "description", "evidence", "recommendation"],
+}
 
 
 # name -> (function, description, parameters schema, takes a "reason" argument)
@@ -1067,40 +1129,11 @@ TOOL_DEFS: dict[str, tuple] = {
         ),
         False,
     ),
-    "record_violation": (
-        record_violation,
-        "Record one violation with direct evidence. Python validates it and can reject it.",
-        _schema(
-            {
-                "rule_id": {**_STR, "description": "e.g. SEC-001; the prefix must match the category"},
-                "category": {"type": "string", "enum": list(CATEGORIES)},
-                "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-                "file": {**_NULLABLE_STR, "description": "repo-relative path, or null"},
-                "line": {**_NULLABLE_INT, "description": "a line you have seen, or null"},
-                "description": {**_STR, "description": "max 160 chars"},
-                "evidence": {**_STR, "description": "what the tool showed; never a secret value"},
-                "recommendation": _STR,
-                "kind": {"type": "string", "enum": ["present", "absent", "history"]},
-                "absent_globs": {
-                    "type": "array",
-                    "items": _STR,
-                    "description": "kind=absent only: file patterns that have no match",
-                },
-                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-            },
-            [
-                "rule_id",
-                "category",
-                "severity",
-                "file",
-                "line",
-                "description",
-                "evidence",
-                "recommendation",
-                "kind",
-                "confidence",
-            ],
-        ),
+    "record_violations": (
+        record_violations,
+        "Record one or more violations (all that the last results showed) in one call. Python validates "
+        "each item and can reject it.",
+        _schema({"violations": {"type": "array", "minItems": 1, "items": _VIOLATION_ITEM}}, ["violations"]),
         False,
     ),
     "update_violation": (
@@ -1165,7 +1198,23 @@ def _coerce(value, schema: dict):
         if "boolean" in types and v.lower() in ("true", "false"):
             return v.lower() == "true"
     if "array" in types and isinstance(value, str):
-        return [v for v in value.replace(",", " ").split() if v]
+        if value.strip().startswith(("[", "{")):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return value
+        else:
+            return [v for v in value.replace(",", " ").split() if v]
+    if "array" in types and isinstance(value, dict):
+        value = [value]
+    if "array" in types and isinstance(value, list) and "properties" in schema.get("items", {}):
+        props = schema["items"]["properties"]
+        return [
+            {k: _coerce(v, props[k]) if k in props else v for k, v in item.items()}
+            if isinstance(item, dict)
+            else item
+            for item in value
+        ]
     if "integer" in types and isinstance(value, float) and value.is_integer():
         return int(value)
     return value

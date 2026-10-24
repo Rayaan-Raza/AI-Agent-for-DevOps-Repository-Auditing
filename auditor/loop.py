@@ -33,7 +33,7 @@ REVIEW_TOOLS = [
 
 @dataclass
 class LoopConfig:
-    max_steps: int = 50
+    max_steps: int = 35
     max_seconds: float = 1800.0
     review_steps: int = 8
     prompt_budget: int = 4800
@@ -161,7 +161,7 @@ class AuditLoop:
                 args = toolbox.parse_arguments(call.name, call.arguments)
                 text = (
                     f"REPEATED CALL: you already ran this exact call at step {prev_step}. Do not repeat "
-                    "calls. Act on the result now: record_violation, add_note, update_coverage, or "
+                    "calls. Act on the result now: record_violations, add_note, update_coverage, or "
                     f"investigate a different file or area.\nResult of step {prev_step}:\n" + prev_text[:2500]
                 )
                 ok = False
@@ -211,8 +211,10 @@ class AuditLoop:
             step += 1
             extra = []
             left = self.cfg.max_steps - step
-            if step >= 0.75 * self.cfg.max_steps:
+            if step >= 0.6 * self.cfg.max_steps:
                 extra.append(prompts.BUDGET_LOW.format(left=left))
+            if self.repeats >= 2:
+                extra.append(prompts.LOOPING.format(n=self.repeats))
             try:
                 resp, elapsed, _ = self._ask(
                     "investigation", step, self.cfg.max_steps, allowed, turns, extra, tail

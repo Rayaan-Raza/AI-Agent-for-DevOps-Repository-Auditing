@@ -55,7 +55,7 @@ Do these steps in a terminal:
 | `GROQ_API_KEY` | (none, mandatory) | Groq API key |
 | `LLM_MODEL` | `openai/gpt-oss-120b` | Groq model ID. `openai/gpt-oss-20b` is faster. |
 | `LLM_REASONING_EFFORT` | `medium` | `low`, `medium`, or `high`. Only for reasoning models. |
-| `MAX_STEPS` | `50` | Maximum number of LLM steps in the investigation |
+| `MAX_STEPS` | `35` | Maximum number of LLM steps in the investigation |
 | `MAX_SECONDS` | `1800` | Maximum run time in seconds |
 
 You can also set these values as environment variables. The `.env` file is in `.gitignore`. Do not commit it.
