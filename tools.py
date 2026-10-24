@@ -20,12 +20,14 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+import jsonschema
 import regex
 import yaml
 
 from auditor.redact import redact
 from auditor.repo import MAX_TEXT_BYTES, run_git
-from auditor.state import AuditState
+from auditor.rules import CATEGORIES
+from auditor.state import AREA_STATUSES, AREAS, AuditState
 
 MAX_RESULT_CHARS = 6000
 READ_MAX_LINES = 200
@@ -883,3 +885,325 @@ def run_tests(ctx: ToolContext, timeout_s: int = 180) -> str:
         return "Test execution timed out. Do not report test failures from this."
     finally:
         subprocess.run(["docker", "volume", "rm", "-f", vol], capture_output=True, timeout=60)
+
+
+# --------------------------------------------------------- state tools ---
+
+
+def add_note(ctx: ToolContext, text: str) -> str:
+    return ctx.state.add_note(redact(text))
+
+
+def update_coverage(ctx: ToolContext, area: str, status: str, reason: str = "") -> str:
+    area = area.strip().lower()
+    if area not in AREAS:
+        raise ToolError(f"area must be one of {AREAS}.")
+    if status not in AREA_STATUSES[1:]:
+        raise ToolError(f"status must be one of {AREA_STATUSES[1:]}.")
+    ctx.state.coverage[area] = status
+    ctx.state.coverage_reasons[area] = " ".join(redact(reason).split())[:150]
+    left = ctx.state.pending_areas()
+    return f"{area} -> {status}. Areas not done: {', '.join(left) if left else 'none'}."
+
+
+def record_violation(ctx: ToolContext, **kwargs) -> str:
+    from auditor.report import validate_candidate
+
+    clean, errors, warnings = validate_candidate(ctx.state, kwargs)
+    if errors:
+        return "REJECTED:\n- " + "\n- ".join(errors)
+    c = ctx.state.add_candidate(clean, ctx.step)
+    loc = f"{clean['file']}:{clean['line']}" if clean["line"] else (clean["file"] or "(no file)")
+    msg = f"Recorded {c.id}: {clean['rule_id']} {clean['severity']} {loc}."
+    if warnings:
+        msg += "\nWARNING: " + " ".join(warnings)
+    return msg
+
+
+def update_violation(ctx: ToolContext, id: str, **changes) -> str:
+    from auditor.report import validate_candidate
+
+    c = ctx.state.get_candidate(id)
+    if c is None or c.retracted:
+        raise ToolError(f"No active violation {id!r}.")
+    merged = {**c.data, **changes}
+    clean, errors, warnings = validate_candidate(ctx.state, merged, ignore_id=c.id)
+    if errors:
+        return "REJECTED:\n- " + "\n- ".join(errors)
+    c.data = clean
+    return f"Updated {c.id}." + ("\nWARNING: " + " ".join(warnings) if warnings else "")
+
+
+def retract_violation(ctx: ToolContext, id: str, reason: str) -> str:
+    c = ctx.state.get_candidate(id)
+    if c is None or c.retracted:
+        raise ToolError(f"No active violation {id!r}.")
+    c.retracted, c.retract_reason = True, " ".join(reason.split())[:200]
+    return f"Retracted {c.id}. Active violations: {len(ctx.state.active_candidates())}."
+
+
+def finish(ctx: ToolContext, summary: str = "") -> str:
+    ctx.state.finished = True
+    ctx.state.finish_summary = " ".join(redact(summary).split())[:500]
+    return "Finish requested."
+
+
+# ------------------------------------------------------------ registry ---
+
+_REASON = {"type": "string", "description": "One sentence: why you call this tool now."}
+_STR = {"type": "string"}
+_INT = {"type": "integer"}
+_BOOL = {"type": "boolean"}
+_NULLABLE_STR = {"type": ["string", "null"]}
+_NULLABLE_INT = {"type": ["integer", "null"]}
+
+
+def _schema(props: dict, required: list[str]) -> dict:
+    return {"type": "object", "properties": props, "required": required}
+
+
+# name -> (function, description, parameters schema, takes a "reason" argument)
+TOOL_DEFS: dict[str, tuple] = {
+    "list_files": (
+        list_files,
+        "List tracked files with size and line count. Deep or vendored directories show as one line.",
+        _schema(
+            {
+                "path": _STR,
+                "depth": {**_INT, "description": "1-6, default 2"},
+                "pattern": {**_STR, "description": "glob, e.g. *.yml"},
+                "reason": _REASON,
+            },
+            ["reason"],
+        ),
+        True,
+    ),
+    "read_file": (
+        read_file,
+        "Read a text file with line numbers (max 200 lines per call). Secrets show as <REDACTED:...>.",
+        _schema({"path": _STR, "start_line": _INT, "end_line": _INT, "reason": _REASON}, ["path", "reason"]),
+        True,
+    ),
+    "search_code": (
+        search_code,
+        "Regex search over tracked text files. Returns file:line: text. Skips vendored dirs unless "
+        "path_glob names them.",
+        _schema(
+            {
+                "pattern": _STR,
+                "path_glob": _STR,
+                "ignore_case": _BOOL,
+                "max_results": _INT,
+                "reason": _REASON,
+            },
+            ["pattern", "reason"],
+        ),
+        True,
+    ),
+    "git_log": (
+        git_log,
+        "Commit history: hash, date, author, subject, changed files. search=TEXT finds commits that "
+        "add or remove TEXT (git log -S). show_patch=true shows diffs.",
+        _schema(
+            {"max_count": _INT, "path": _STR, "search": _STR, "show_patch": _BOOL, "reason": _REASON},
+            ["reason"],
+        ),
+        True,
+    ),
+    "inspect_workflows": (
+        inspect_workflows,
+        "Facts about GitHub Actions workflows with line numbers: triggers, permissions, jobs, steps, "
+        "action refs (sha/tag/branch), with/env values, secrets used, untrusted-input expressions.",
+        _schema({"path": _STR, "reason": _REASON}, ["reason"]),
+        True,
+    ),
+    "inspect_dependencies": (
+        inspect_dependencies,
+        "Parse dependency manifests: each dependency with its constraint type (exact, range, "
+        "lower_only, none, url_or_path), lockfiles present, conflicting constraints.",
+        _schema({"reason": _REASON}, ["reason"]),
+        True,
+    ),
+    "git_tracked_ignored": (
+        git_tracked_ignored,
+        "Tracked files that match .gitignore, and tracked files that match common temporary, local "
+        "or secret file patterns.",
+        _schema({"reason": _REASON}, ["reason"]),
+        True,
+    ),
+    "run_ruff": (
+        run_ruff,
+        "Run the ruff linter (static, does not execute code): issue counts by rule and the first "
+        "issues. Tells if the repository has a ruff config.",
+        _schema({"path": _STR, "reason": _REASON}, ["reason"]),
+        True,
+    ),
+    "run_tests": (
+        run_tests,
+        "Run pytest in an isolated Docker container. Returns the summary.",
+        _schema({"reason": _REASON}, ["reason"]),
+        True,
+    ),
+    "add_note": (
+        add_note,
+        "Keep a short fact (max 200 chars). Old tool results leave your context; notes stay.",
+        _schema({"text": _STR}, ["text"]),
+        False,
+    ),
+    "update_coverage": (
+        update_coverage,
+        "Set the status of an inspection area: in_progress, examined or not_applicable.",
+        _schema(
+            {
+                "area": {"type": "string", "enum": AREAS},
+                "status": {"type": "string", "enum": ["in_progress", "examined", "not_applicable"]},
+                "reason": _STR,
+            },
+            ["area", "status", "reason"],
+        ),
+        False,
+    ),
+    "record_violation": (
+        record_violation,
+        "Record one violation with direct evidence. Python validates it and can reject it.",
+        _schema(
+            {
+                "rule_id": {**_STR, "description": "e.g. SEC-001; the prefix must match the category"},
+                "category": {"type": "string", "enum": list(CATEGORIES)},
+                "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                "file": {**_NULLABLE_STR, "description": "repo-relative path, or null"},
+                "line": {**_NULLABLE_INT, "description": "a line you have seen, or null"},
+                "description": {**_STR, "description": "max 160 chars"},
+                "evidence": {**_STR, "description": "what the tool showed; never a secret value"},
+                "recommendation": _STR,
+                "kind": {"type": "string", "enum": ["present", "absent", "history"]},
+                "absent_globs": {
+                    "type": "array",
+                    "items": _STR,
+                    "description": "kind=absent only: file patterns that have no match",
+                },
+                "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            },
+            [
+                "rule_id",
+                "category",
+                "severity",
+                "file",
+                "line",
+                "description",
+                "evidence",
+                "recommendation",
+                "kind",
+                "confidence",
+            ],
+        ),
+        False,
+    ),
+    "update_violation": (
+        update_violation,
+        "Change fields of a recorded violation (by id, e.g. V2).",
+        _schema(
+            {
+                "id": _STR,
+                "rule_id": _STR,
+                "category": _STR,
+                "severity": _STR,
+                "file": _NULLABLE_STR,
+                "line": _NULLABLE_INT,
+                "description": _STR,
+                "evidence": _STR,
+                "recommendation": _STR,
+                "confidence": _STR,
+            },
+            ["id"],
+        ),
+        False,
+    ),
+    "retract_violation": (
+        retract_violation,
+        "Remove a recorded violation that is weak, wrong or a duplicate.",
+        _schema({"id": _STR, "reason": _STR}, ["id", "reason"]),
+        False,
+    ),
+    "finish": (
+        finish,
+        "End the current phase when the audit is complete.",
+        _schema({"summary": _STR}, ["summary"]),
+        False,
+    ),
+}
+
+
+def tool_names(allow_exec: bool) -> list[str]:
+    return [n for n in TOOL_DEFS if allow_exec or n != "run_tests"]
+
+
+def tool_schemas(names: list[str]) -> list[dict]:
+    """Tool definitions in the OpenAI/Groq function-calling format."""
+    return [
+        {
+            "type": "function",
+            "function": {"name": n, "description": TOOL_DEFS[n][1], "parameters": TOOL_DEFS[n][2]},
+        }
+        for n in names
+    ]
+
+
+def _coerce(value, schema: dict):
+    types = schema.get("type")
+    types = types if isinstance(types, list) else [types]
+    if isinstance(value, str):
+        v = value.strip()
+        if "null" in types and v.lower() in ("null", "none", ""):
+            return None
+        if "integer" in types and re.fullmatch(r"-?\d+", v):
+            return int(v)
+        if "boolean" in types and v.lower() in ("true", "false"):
+            return v.lower() == "true"
+    if "integer" in types and isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def parse_arguments(name: str, raw) -> dict:
+    """Parse and validate tool arguments. Unknown keys are dropped. Raise ToolError on failure."""
+    if name not in TOOL_DEFS:
+        raise ToolError(f"Unknown tool {name!r}. Available: {', '.join(TOOL_DEFS)}.")
+    if isinstance(raw, str):
+        try:
+            args = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError as e:
+            raise ToolError(f"Arguments are not valid JSON: {e.msg}.") from None
+    else:
+        args = raw or {}
+    if not isinstance(args, dict):
+        raise ToolError("Arguments must be a JSON object.")
+    schema = TOOL_DEFS[name][2]
+    props = schema["properties"]
+    args = {k: _coerce(v, props[k]) for k, v in args.items() if k in props}
+    try:
+        jsonschema.validate(args, schema)
+    except jsonschema.ValidationError as e:
+        where = ".".join(str(p) for p in e.path) or "arguments"
+        raise ToolError(f"Invalid arguments ({where}): {e.message}") from None
+    return args
+
+
+def execute(ctx: ToolContext, name: str, raw_args) -> tuple[str, dict, bool]:
+    """Run a tool. Return (result text, parsed args, ok). Errors become text for the LLM."""
+    try:
+        args = parse_arguments(name, raw_args)
+    except ToolError as e:
+        return f"ERROR: {e}", {}, False
+    if name == "run_tests" and not ctx.allow_exec:
+        return "ERROR: run_tests is not available.", args, False
+    func, _, _, takes_reason = TOOL_DEFS[name]
+    call_args = {k: v for k, v in args.items() if not (takes_reason and k == "reason")}
+    try:
+        return func(ctx, **call_args), args, True
+    except ToolError as e:
+        return f"ERROR: {e}", args, False
+    except subprocess.TimeoutExpired:
+        return "ERROR: the tool timed out.", args, False
+    except (OSError, UnicodeError, ValueError, TypeError, RecursionError) as e:
+        return f"ERROR: {type(e).__name__}: {str(e)[:200]}", args, False
