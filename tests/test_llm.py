@@ -164,3 +164,21 @@ def test_length_cutoff_retries_with_more_tokens(monkeypatch):
     monkeypatch.setattr(client, "_request", fake_request)
     out = client.complete([], [])
     assert out.tool_calls and seen == [1000, 3000]
+
+
+def test_long_rate_limit_wait_is_configurable(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    import groq
+
+    parsed = NS(
+        choices=[NS(message=NS(content="", tool_calls=[]), finish_reason="stop")],
+        usage=NS(prompt_tokens=10, completion_tokens=5),
+    )
+    err = groq.RateLimitError("429", response=_resp(429, headers={"retry-after": "1200"}), body=None)
+    client = _client_raising(monkeypatch, [err], success=_Raw(parsed, {}))
+    client.max_wait_seconds = 1800
+    slept = []
+    monkeypatch.setattr(llm_mod.time, "sleep", lambda s: slept.append(s))
+    client.complete([{"role": "user", "content": "x"}], [])
+    assert slept == [1200]

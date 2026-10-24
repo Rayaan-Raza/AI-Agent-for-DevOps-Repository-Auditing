@@ -97,12 +97,13 @@ def test_absent_kind(ctx):
     clean, errors, _ = validate_candidate(
         ctx.state,
         good(
-            rule_id="DEP-002",
-            category="dependency_management",
+            rule_id="TST-001",
+            category="testing",
             file=None,
             line=None,
+            description="No automated tests",
             kind="absent",
-            absent_globs=["poetry.lock", "*.lock"],
+            absent_globs=["tests/*", "**/test_*.py"],
         ),
     )
     assert not errors
@@ -281,3 +282,56 @@ def test_record_violations_list_and_coercion(ctx):
 def test_reason_not_required_by_api_schema():
     for spec in tools.tool_schemas(tools.tool_names(True)):
         assert "reason" not in spec["function"]["parameters"]["required"]
+
+
+def _dep(**over):
+    base = dict(
+        rule_id="DEP-001",
+        category="dependency_management",
+        severity="medium",
+        file=None,
+        line=None,
+        description="Dependencies are unpinned",
+        evidence="e",
+        recommendation="r",
+        kind="present",
+        confidence="high",
+    )
+    base.update(over)
+    return base
+
+
+def test_dependency_guard_ranges_are_not_unpinned(git_repo_factory):
+    repo = git_repo_factory([{"pyproject.toml": '[project]\nname = "x"\ndependencies = ["click>=8.1,<9"]\n'}])
+    state = AuditState(repo=repo)
+    _, errors, _ = validate_candidate(state, _dep(file="pyproject.toml"))
+    assert any("properly constrained" in e for e in errors)
+    _, errors, _ = validate_candidate(state, _dep(rule_id="DEP-002", description="No lockfile"))
+    assert any("No tool that creates a lockfile" in e for e in errors)
+
+
+def test_dependency_guard_allows_real_problems(git_repo_factory):
+    repo = git_repo_factory(
+        [{"requirements.txt": "flask\nrequests==2.0\n", "Pipfile": "[packages]\nflask = '*'\n"}]
+    )
+    state = AuditState(repo=repo)
+    clean, errors, _ = validate_candidate(state, _dep(file="requirements.txt"))
+    assert not errors
+    clean, errors, _ = validate_candidate(
+        state, _dep(rule_id="DEP-002", description="Pipfile.lock is missing")
+    )
+    assert not errors
+    # DEP-003 mentions ranges but is about inconsistency: not blocked.
+    clean, errors, _ = validate_candidate(
+        state,
+        _dep(rule_id="DEP-003", description="flask has a version range in one file and none in another"),
+    )
+    assert not errors
+
+
+def test_dependency_guard_lockfile_present(git_repo_factory):
+    repo = git_repo_factory([{"pyproject.toml": "[tool.poetry]\nname = 'x'\n", "poetry.lock": "#\n"}])
+    _, errors, _ = validate_candidate(
+        AuditState(repo=repo), _dep(rule_id="DEP-002", description="Missing lockfile")
+    )
+    assert any("A lockfile is present: poetry.lock" in e for e in errors)

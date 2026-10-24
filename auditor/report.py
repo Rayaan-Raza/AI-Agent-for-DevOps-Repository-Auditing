@@ -106,6 +106,39 @@ def _in_history(state: AuditState, path: str) -> bool:
         return False
 
 
+_UNPINNED_CLAIM = re.compile(
+    r"unpinned|not pinned|exact pin|pin exact|version range|no version|"
+    r"loose|unconstrained|without version",
+    re.I,
+)
+_LOCKFILE_CLAIM = re.compile(r"lock\s*file", re.I)
+
+
+def _dependency_guard(state: AuditState, rid: str, file: str | None, text: str) -> list[str]:
+    """Reject dependency claims that the parsed manifests contradict."""
+    import tools  # local import: tools imports this package
+
+    facts = tools.collect_dependencies(tools.ToolContext(state=state))
+    errors = []
+    if rid == "DEP-001" or (rid != "DEP-003" and _UNPINNED_CLAIM.search(text)):
+        scoped = [d for d in facts.deps if file is None or d[0] == file]
+        if scoped and not any(d[3] in ("none", "lower_only") for d in scoped):
+            where = file or "the manifests"
+            errors.append(
+                f"Every dependency in {where} has an exact pin or an upper-bounded range. That is properly "
+                "constrained; it is not a violation."
+            )
+    if rid == "DEP-002" or (rid != "DEP-003" and _LOCKFILE_CLAIM.search(text)):
+        if not facts.lock_tools and not facts.locks:
+            errors.append(
+                "No tool that creates a lockfile (poetry, uv, pipenv, npm/yarn/pnpm) is configured, so a "
+                "missing lockfile is not a violation."
+            )
+        elif facts.locks and re.search(r"missing|no lock|absent|without", text, re.I):
+            errors.append(f"A lockfile is present: {', '.join(facts.locks[:3])}.")
+    return errors
+
+
 def validate_candidate(
     state: AuditState, raw: dict, ignore_id: str | None = None, check_duplicates: bool = True
 ) -> tuple[dict | None, list[str], list[str]]:
@@ -205,6 +238,9 @@ def validate_candidate(
         errors.append(
             "Do not report remote branch protection or required reviews. Files cannot show these settings."
         )
+
+    if not errors and cat == "dependency_management":
+        errors += _dependency_guard(state, rid, f, text)
 
     if not errors and check_duplicates:
         for c in state.active_candidates():

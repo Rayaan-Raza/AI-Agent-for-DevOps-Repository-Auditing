@@ -632,10 +632,21 @@ def _pep508(item: str) -> tuple[str, str]:
     return (m.group(1), m.group(3).strip()) if m else (item, "")
 
 
-def inspect_dependencies(ctx: ToolContext) -> str:
-    deps: list[tuple[str, int | None, str, str, str]] = []  # file, line, name, type, spec
+@dataclass
+class DependencyFacts:
+    deps: list[tuple[str, int | None, str, str, str]]  # file, line, name, constraint type, spec
+    locks: list[str]
+    lock_tools: list[str]  # configured tools that create a lockfile (poetry, uv, pipenv, npm)
+    notes: list[str]
+    seen: dict[str, set[int]]
+
+
+def collect_dependencies(ctx: ToolContext) -> DependencyFacts:
+    """Parse the dependency manifests. No side effects on the agent state."""
+    deps: list[tuple[str, int | None, str, str, str]] = []
     seen: dict[str, set[int]] = {}
     notes: list[str] = []
+    lock_tools: set[str] = set()
     files = ctx.repo.files
 
     for rel in sorted(files):
@@ -659,6 +670,10 @@ def inspect_dependencies(ctx: ToolContext) -> str:
                     ln = _find_line(lines, name)
                     deps.append((rel, ln, name, classify_python(spec), spec))
                 poetry = data.get("tool", {}).get("poetry", {})
+                if poetry:
+                    lock_tools.add("poetry")
+                if "uv" in data.get("tool", {}):
+                    lock_tools.add("uv")
                 sections = [poetry.get("dependencies", {}), poetry.get("dev-dependencies", {})]
                 sections += [g.get("dependencies", {}) for g in poetry.get("group", {}).values()]
                 for sec in sections:
@@ -679,6 +694,7 @@ def inspect_dependencies(ctx: ToolContext) -> str:
                             name, spec = _pep508(item)
                             deps.append((rel, _find_line(lines, name), name, classify_python(spec), spec))
             elif base == "Pipfile":
+                lock_tools.add("pipenv")
                 lines = read_lines(ctx, rel)
                 data = tomllib.loads("\n".join(lines))
                 for sec in ("packages", "dev-packages"):
@@ -687,6 +703,7 @@ def inspect_dependencies(ctx: ToolContext) -> str:
                             (rel, _find_line(lines, name), name, classify_poetry(spec), str(spec)[:40])
                         )
             elif base == "package.json":
+                lock_tools.add("npm")
                 lines = read_lines(ctx, rel)
                 data = json.loads("\n".join(lines))
                 for sec in ("dependencies", "devDependencies"):
@@ -708,7 +725,14 @@ def inspect_dependencies(ctx: ToolContext) -> str:
     )
     locks = [p for p in files if p.rsplit("/", 1)[-1] in lock_names and not is_vendored(p)]
     locks += [p for p in files if re.search(r"requirements.*\.lock$", p)]
+    if any(p.rsplit("/", 1)[-1] == "uv.lock" for p in locks):
+        lock_tools.add("uv")
+    return DependencyFacts(deps, locks, sorted(lock_tools), notes, seen)
 
+
+def inspect_dependencies(ctx: ToolContext) -> str:
+    facts = collect_dependencies(ctx)
+    deps, locks, notes, seen = facts.deps, facts.locks, facts.notes, facts.seen
     if not deps and not locks:
         return (
             "No dependency manifests found (requirements*.txt, pyproject.toml, setup.cfg, "
@@ -730,6 +754,10 @@ def inspect_dependencies(ctx: ToolContext) -> str:
         if len(items) > 40:
             out.append(f"  [... {len(items) - 40} more]")
     out.append("Lockfiles present: " + (", ".join(sorted(locks)) or "(none)"))
+    out.append(
+        "Configured tools that create a lockfile: "
+        + (", ".join(facts.lock_tools) or "(none, so no lockfile is expected)")
+    )
 
     specs: dict[str, set[tuple[str, str]]] = {}
     for rel, _, name, _, spec in deps:
