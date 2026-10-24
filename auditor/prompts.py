@@ -81,6 +81,10 @@ TOOL_USE_FAILED = (
     "Your last tool call was malformed and was rejected by the API ({error}). "
     "Send ONE valid tool call with JSON arguments that match the tool schema."
 )
+TOOL_USE_FAILED_AGAIN = (
+    "It failed again. Use a simpler call: one tool, short plain-text values, no quotes or backslashes "
+    "inside values; for record_violations send at most 2 items."
+)
 FINISH_WITH_PENDING = (
     "These areas are not examined yet: {areas}. Examine them, or mark them "
     "not_applicable with update_coverage, then call finish again."

@@ -124,6 +124,21 @@ def read_lines(ctx: ToolContext, rel: str) -> list[str]:
     return text.splitlines()
 
 
+_REDACTION = re.compile(r"<REDACTED:([a-z_]+)(?: len=\d+)?( placeholder-like| real-looking)?>")
+
+
+def secrets_footer(items: list[tuple[str, str]]) -> str:
+    """List (location, text) pairs that contain redacted secrets, so the LLM can record them directly."""
+    found = []
+    for loc, text in items:
+        for kind, hint in _REDACTION.findall(text):
+            found.append(f"{loc} {kind}{hint or ''}")
+    if not found:
+        return ""
+    more = f" (+{len(found) - 12} more)" if len(found) > 12 else ""
+    return "\n[Secret values redacted at: " + "; ".join(found[:12]) + more + "]"
+
+
 def human_size(n: int) -> str:
     return f"{n / 1024:.1f} KB" if n >= 1024 else f"{n} B"
 
@@ -187,12 +202,14 @@ def read_file(ctx: ToolContext, path: str, start_line: int = 1, end_line: int | 
     end = min(end, start + READ_MAX_LINES - 1)
 
     width = len(str(end))
-    out, used, shown_end = [], 0, start - 1
+    out, used, shown_end, secret_rows = [], 0, start - 1, []
     for n in range(start, end + 1):
         text = redact(lines[n - 1], path=rel)
         if len(text) > 500:
             text = text[:500] + " [... line cut]"
         row = f"{n:>{width}}  {text}"
+        if "<REDACTED:" in text:
+            secret_rows.append((n, text))
         if used + len(row) > MAX_RESULT_CHARS - 200 and out:
             break
         out.append(row)
@@ -200,9 +217,9 @@ def read_file(ctx: ToolContext, path: str, start_line: int = 1, end_line: int | 
         shown_end = n
     ctx.state.mark_seen(rel, range(start, shown_end + 1))
     header = f"{rel}  lines {start}-{shown_end} of {total}"
-    footer = ""
+    footer = secrets_footer([(f"line {n}", t) for n, t in secret_rows if n <= shown_end])
     if shown_end < total:
-        footer = f"\n[More lines: call read_file with start_line={shown_end + 1}.]"
+        footer += f"\n[More lines: call read_file with start_line={shown_end + 1}.]"
     return header + "\n" + "\n".join(out) + footer
 
 
@@ -244,7 +261,7 @@ def search_code(
         path_line = "No tracked file PATH matches."
     max_results = max(1, min(int(max_results), 100))
     deadline = time.monotonic() + 20
-    hits, total, files_with_hits, timeouts = [], 0, set(), 0
+    hits, total, files_with_hits, timeouts, secret_hits = [], 0, set(), 0, []
     want_vendored = bool(path_glob) and any(v in path_glob for v in VENDORED)
     for rel in sorted(ctx.repo.files):
         info = ctx.repo.files[rel]
@@ -272,6 +289,8 @@ def search_code(
             if len(hits) < max_results:
                 text = redact(line.strip(), path=rel)[:LINE_TEXT_LIMIT]
                 hits.append(f"{rel}:{n}: {text}")
+                if "<REDACTED:" in text:
+                    secret_hits.append((f"{rel}:{n}", text))
                 ctx.state.mark_seen(rel, [n])
     if total == 0:
         scope = f" in files matching {path_glob!r}" if path_glob else ""
@@ -282,7 +301,8 @@ def search_code(
         summary += f" (first {max_results} shown)"
     if timeouts:
         summary += f"; {timeouts} lines timed out"
-    return clip(path_line + "\nCONTENT matches:\n" + "\n".join(hits) + "\n" + summary + ".")
+    body = path_line + "\nCONTENT matches:\n" + "\n".join(hits) + "\n" + summary + "."
+    return clip(body + secrets_footer(secret_hits))
 
 
 def git_log(
@@ -1123,7 +1143,10 @@ TOOL_DEFS: dict[str, tuple] = {
     "record_violations": (
         record_violations,
         "Record all violations the last results showed, in one call. Each item is validated.",
-        _schema({"violations": {"type": "array", "minItems": 1, "items": _VIOLATION_ITEM}}, ["violations"]),
+        _schema(
+            {"violations": {"type": "array", "minItems": 1, "maxItems": 6, "items": _VIOLATION_ITEM}},
+            ["violations"],
+        ),
         False,
     ),
     "update_violation": (

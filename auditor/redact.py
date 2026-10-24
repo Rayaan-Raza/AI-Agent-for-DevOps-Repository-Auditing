@@ -103,7 +103,7 @@ def _placeholder_hint(value: str) -> str:
     low = value.lower()
     if any(w in low for w in PLACEHOLDER_WORDS) or len(set(low)) <= 2:
         return " placeholder-like"
-    return ""
+    return " real-looking"
 
 
 def _is_config(path: str | None) -> bool:
@@ -132,8 +132,10 @@ def redact(text: str, path: str | None = None) -> str:
     for secret in _known:
         text = text.replace(secret, "<REDACTED:runtime_secret>")
     for kind, pattern in _SPECIFIC:
-        text = pattern.sub(f"<REDACTED:{kind}>", text)
-    text = _URL_CREDS.sub(r"\1:<REDACTED:url_password>@", text)
+        text = pattern.sub(lambda m, k=kind: f"<REDACTED:{k}{_placeholder_hint(m.group(0))}>", text)
+    text = _URL_CREDS.sub(
+        lambda m: f"{m.group(1)}:<REDACTED:url_password{_placeholder_hint(m.group(2))}>@", text
+    )
 
     def quoted(m: re.Match) -> str:
         val = m.group("val")

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import tools as toolbox
 from auditor import prompts
 from auditor.context import Turn, build_messages
-from auditor.llm import LLMClient, LLMError, ToolUseFailed
+from auditor.llm import LLMClient, ToolUseFailed
 from auditor.redact import redact, redact_obj
 from auditor.state import AuditState
 
@@ -227,12 +227,17 @@ class AuditLoop:
                         "phase": "investigation",
                         "event": "tool_use_failed",
                         "error": str(e)[:300],
+                        "failed_generation": e.failed_generation[:800],
                     }
                 )
                 self.log(f"[investigation {step}] malformed tool call ({tool_fail})")
                 if tool_fail > self.cfg.max_tool_failures:
-                    raise LLMError("The model made malformed tool calls too many times.") from e
-                tail = [{"role": "user", "content": prompts.TOOL_USE_FAILED.format(error=str(e)[:150])}]
+                    # Keep the work done so far: stop investigating and go on to the review and report.
+                    return "tool_failures", step
+                hint = prompts.TOOL_USE_FAILED.format(error=str(e)[:150])
+                if tool_fail >= 2:
+                    hint += " " + prompts.TOOL_USE_FAILED_AGAIN
+                tail = [{"role": "user", "content": hint}]
                 continue
             tool_fail = 0
             if not resp.tool_calls:
@@ -320,7 +325,13 @@ class AuditLoop:
             except ToolUseFailed as e:
                 tool_fail += 1
                 self.trace.write(
-                    {"step": step, "phase": "review", "event": "tool_use_failed", "error": str(e)[:300]}
+                    {
+                        "step": step,
+                        "phase": "review",
+                        "event": "tool_use_failed",
+                        "error": str(e)[:300],
+                        "failed_generation": e.failed_generation[:800],
+                    }
                 )
                 if tool_fail > self.cfg.max_tool_failures:
                     break
