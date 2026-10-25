@@ -1,0 +1,55 @@
+{
+  "repository": "https://github.com/Rayaan-Raza/mlops-cd-demo",
+  "violations": [
+    {
+      "rule_id": "CI-003",
+      "category": "ci",
+      "severity": "high",
+      "file": ".github/workflows/cd.yml",
+      "line": 12,
+      "description": "CI workflow does not execute tests; test job lacks test command.",
+      "evidence": "Workflow .github/workflows/cd.yml defines job 'test' with steps only for checkout, setup Python, and install dependencies, but no step runs tests.",
+      "recommendation": "Add a step to run the test suite, e.g., `pytest` or appropriate test command, and ensure it fails the job on test failures."
+    },
+    {
+      "rule_id": "HYG-002",
+      "category": "repository_hygiene",
+      "severity": "medium",
+      "file": null,
+      "line": null,
+      "description": "Repository missing a .gitignore file, leading to tracking of compiled bytecode and other unwanted files.",
+      "evidence": "git_tracked_ignored reported no .gitignore in the repo",
+      "recommendation": "Create a .gitignore file that excludes __pycache__/, *.pyc, and other build artifacts."
+    },
+    {
+      "rule_id": "HYG-003",
+      "category": "repository_hygiene",
+      "severity": "medium",
+      "file": null,
+      "line": null,
+      "description": "Tracked compiled Python bytecode files (.pyc) are committed to the repository.",
+      "evidence": "git_tracked_ignored reported __pycache__/app.cpython-314.pyc and tests/__pycache__/test_app.cpython-314-pytest-8.4.2.pyc as tracked files matching temporary patterns.",
+      "recommendation": "Add a .gitignore entry for __pycache__/ and *.pyc and remove the committed .pyc files from the repository."
+    },
+    {
+      "rule_id": "BLD-001",
+      "category": "build_release",
+      "severity": "medium",
+      "file": "Dockerfile",
+      "line": 1,
+      "description": "Docker image runs as root user by default",
+      "evidence": "Dockerfile line 1-13 shows no USER instruction, container runs as root",
+      "recommendation": "Add a non-root USER and switch to it before running the application"
+    },
+    {
+      "rule_id": "COL-002",
+      "category": "collaboration",
+      "severity": "low",
+      "file": null,
+      "line": null,
+      "description": "Repository lacks contribution guidelines or review process documentation.",
+      "evidence": "No CONTRIBUTING.md, CODEOWNERS, or PR template files are present in the repository.",
+      "recommendation": "Add a CONTRIBUTING.md file and optionally a CODEOWNERS file to define review responsibilities."
+    }
+  ]
+}
