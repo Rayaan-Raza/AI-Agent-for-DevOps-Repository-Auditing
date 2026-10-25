@@ -106,6 +106,40 @@ def _in_history(state: AuditState, path: str) -> bool:
         return False
 
 
+_NO_TESTS_CLAIM = re.compile(
+    r"\b(no|not|lacks?|without|missing|never|absent)\b[^.]{0,40}\btest|does not (run|execute) (any )?tests?",
+    re.I,
+)
+_TRIGGER_WORDS = re.compile(r"pull[ _-]?request|\bPRs?\b|\bpush\b|trigger|\btags?\b|branch|schedule", re.I)
+_TEST_COMMAND = re.compile(
+    r"\b(pytest|python3? -m (pytest|unittest)|tox|nox|(npm|yarn|pnpm) (run )?test|make test|go test"
+    r"|mvn( \S+)* test|gradlew? test|cargo test|bundle exec rspec)\b"
+)
+_CI_FILE = re.compile(
+    r"^(\.github/workflows/.+\.ya?ml|\.gitlab-ci\.yml|\.circleci/.+|Jenkinsfile|\.travis\.yml"
+    r"|azure-pipelines\.yml)$"
+)
+
+
+def _ci_test_guard(state: AuditState, file: str, claim: str) -> list[str]:
+    """Reject 'the CI file runs no tests' when the file has a test command. Claims about when the
+    tests run (triggers) are not affected."""
+    if not _CI_FILE.match(file) or not _NO_TESTS_CLAIM.search(claim) or _TRIGGER_WORDS.search(claim):
+        return []
+    info = state.repo.files.get(file)
+    if info is None or info.binary:
+        return []
+    text = (state.repo.root / file).read_bytes().decode("utf-8", "replace")
+    for n, line in enumerate(text.splitlines(), 1):
+        m = _TEST_COMMAND.search(line)
+        if m and not line.lstrip().startswith("#"):
+            return [
+                f"{file} line {n} runs tests ({m.group(0)!r}). If the problem is when the tests run "
+                "(for example only on tags, not on pull requests), describe that instead."
+            ]
+    return []
+
+
 _UNPINNED_CLAIM = re.compile(
     r"unpinned|not pinned|exact pin|pin exact|version range|no version|"
     r"loose|unconstrained|without version",
@@ -241,6 +275,9 @@ def validate_candidate(
 
     if not errors and cat == "dependency_management":
         errors += _dependency_guard(state, rid, f, text)
+
+    if not errors and f is not None:
+        errors += _ci_test_guard(state, f, f"{d['description']} {d['evidence']}")
 
     if not errors and check_duplicates:
         for c in state.active_candidates():
