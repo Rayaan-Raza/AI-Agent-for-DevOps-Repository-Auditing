@@ -115,14 +115,14 @@ def test_finish_with_pending_areas_gets_one_reminder(state):
 
 
 def test_max_steps(state):
-    script = [reply(call("list_files", reason="look")) for _ in range(10)]
+    script = [reply(call("list_files", depth=d, reason="look")) for d in range(1, 11)]
     result, llm, _ = run(state, script, max_steps=4)
     assert result.stop_reason == "max_steps" and result.steps == 4
     assert len(llm.requests) == 4  # no review: no candidates
 
 
 def test_budget_low_warning(state):
-    script = [reply(call("list_files", reason="look")) for _ in range(4)]
+    script = [reply(call("list_files", depth=d, reason="look")) for d in range(1, 5)]
     _, llm, _ = run(state, script, max_steps=4)
     assert "Budget low" in llm.requests[3][1]["content"]
     assert "Budget low" not in llm.requests[0][1]["content"]
@@ -211,7 +211,7 @@ def test_time_limit_skips_review(state):
         t[0] += 50
         return t[0]
 
-    llm = FakeLLM([reply(call("list_files", reason="x"))] * 50)
+    llm = FakeLLM([reply(call("search_code", pattern=f"x{i}", reason="x")) for i in range(50)])
     result = AuditLoop(state, llm, LoopConfig(max_seconds=200), Trace(None), clock=clock).run()
     assert result.stop_reason == "time" and not result.reviewed
 
@@ -311,3 +311,59 @@ def test_files_without_verdict_listed_until_handled(state):
         ],
     )
     assert files_without_verdict(state) == []
+
+
+def _dup(**over):
+    item = dict(
+        rule_id="SEC-001",
+        category="security",
+        severity="critical",
+        file="app/config.py",
+        line=4,
+        description="Hardcoded key",
+        evidence="literal value",
+        recommendation="Use env",
+        kind="present",
+        confidence="high",
+    )
+    item.update(over)
+    return reply(call("record_violation", **item))
+
+
+def test_stalled_investigation_ends_and_reviews(state):
+    script = [
+        reply(call("read_file", path="app/config.py", reason="r")),
+        _dup(),  # progress: recorded V1
+        reply(call("read_file", path="app/config.py", reason="again")),  # repeat
+        _dup(),  # duplicate only
+        _dup(),  # duplicate only -> 3 turns without progress
+        reply(call("finish", summary="reviewed")),  # review phase
+    ]
+    result, llm, trace = run(state, script, max_steps=30)
+    assert result.stop_reason == "stalled" and result.steps == 5
+    assert result.reviewed
+    assert [c.data["rule_id"] for c in state.active_candidates()] == ["SEC-001"]
+    assert any(r.get("event") == "stalled" for r in trace.records)
+    # The warning was in the audit state before the stop, with the steps left.
+    assert "gave no new information" in llm.requests[3][1]["content"]
+    assert "after 2 more step(s)" in llm.requests[3][1]["content"]
+
+
+def test_duplicate_only_call_gets_finish_hint(state):
+    script = [reply(call("read_file", path="app/config.py", reason="r")), _dup(), _dup()]
+    _, _, trace = run(state, script, max_steps=3)
+    last = [r for r in trace.records if r.get("tool") == "record_violations"][-1]
+    assert "call finish now" in last["result_preview"]
+
+
+def test_progress_resets_stall_counter(state):
+    script = [
+        reply(call("read_file", path="app/config.py", reason="r")),
+        reply(call("read_file", path="app/config.py", reason="again")),  # 1 without progress
+        reply(call("read_file", path="app/config.py", reason="again")),  # 2 without progress
+        reply(call("add_note", text="config.py: hardcoded key on line 4")),  # progress -> reset
+        reply(call("read_file", path="app/config.py", reason="again")),  # 1
+        reply(call("read_file", path="app/config.py", reason="again")),  # 2
+    ]
+    result, _, _ = run(state, script, max_steps=6)
+    assert result.stop_reason == "max_steps"

@@ -335,3 +335,61 @@ def test_dependency_guard_lockfile_present(git_repo_factory):
         AuditState(repo=repo), _dep(rule_id="DEP-002", description="Missing lockfile")
     )
     assert any("A lockfile is present: poetry.lock" in e for e in errors)
+
+
+_CD_WORKFLOW = (
+    "on:\n  push:\n    tags: ['v*']\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n"
+    "      - uses: actions/checkout@v4\n      - run: pip install -r requirements.txt\n"
+    "      - name: Run tests\n        run: pytest\n"
+)
+
+
+def _ci(**over):
+    base = dict(
+        rule_id="CI-003",
+        category="ci",
+        severity="high",
+        file=".github/workflows/cd.yml",
+        line=None,
+        description="CI workflow does not execute tests",
+        evidence="The test job has no test step.",
+        recommendation="Add a pytest step",
+        kind="present",
+        confidence="high",
+    )
+    base.update(over)
+    return base
+
+
+def test_ci_guard_rejects_false_no_tests_claim(git_repo_factory):
+    state = AuditState(repo=git_repo_factory([{".github/workflows/cd.yml": _CD_WORKFLOW}]))
+    _, errors, _ = validate_candidate(state, _ci())
+    assert any("line 11 runs tests ('pytest')" in e for e in errors)
+
+
+def test_ci_guard_allows_trigger_claims_and_real_gaps(git_repo_factory):
+    state = AuditState(
+        repo=git_repo_factory(
+            [
+                {
+                    ".github/workflows/cd.yml": _CD_WORKFLOW,
+                    ".github/workflows/lint.yml": (
+                        "on: [push]\njobs:\n  l:\n    steps:\n      - run: ruff check .\n"
+                    ),
+                }
+            ]
+        )
+    )
+    # "Tests run only on tags, not on pull requests" is a real finding.
+    clean, errors, _ = validate_candidate(
+        state,
+        _ci(
+            rule_id="TST-003",
+            category="testing",
+            description="Tests do not run on pull requests or pushes, only on version tags",
+        ),
+    )
+    assert not errors
+    # A workflow that really has no test command.
+    clean, errors, _ = validate_candidate(state, _ci(file=".github/workflows/lint.yml"))
+    assert not errors

@@ -1023,6 +1023,8 @@ def record_violations(ctx: ToolContext, violations: list) -> str:
         out.append(f"item {i}: " + record_violation(ctx, **item))
     if len(violations) > 10:
         out.append("Only the first 10 items were processed. Send the rest in a new call.")
+    if out and all("Duplicate of V" in line for line in out):
+        out.append("All items were already recorded. If you have nothing new, call finish now.")
     return "\n".join(out)
 
 

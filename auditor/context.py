@@ -26,6 +26,7 @@ class Turn:
     results: list[str]
     args: list[dict] = field(default_factory=list)
     ok: list[bool] = field(default_factory=list)
+    progress: bool = False  # True if the turn gave the LLM new information
 
 
 def summarize_call(step: int, call: ToolCall, args: dict, result: str, ok: bool) -> str:

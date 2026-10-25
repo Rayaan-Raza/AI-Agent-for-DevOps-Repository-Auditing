@@ -41,6 +41,7 @@ class LoopConfig:
     allow_exec: bool = False
     max_tool_failures: int = 3
     max_no_tool: int = 3
+    max_stalled_turns: int = 3
 
 
 @dataclass
@@ -72,6 +73,22 @@ class Trace:
             self._fh = None
 
 
+def _is_progress(name: str, key: str | None, ok: bool, text: str, before: dict, after: dict) -> bool:
+    """True if a call gave the LLM something new: a fresh tool result, a recorded finding,
+    a new note, or a real change in area coverage."""
+    if not ok:
+        return False
+    if key is not None:  # investigation tool, not a repeat (repeats never reach here)
+        return True
+    if name == "record_violations":
+        return "Recorded V" in text
+    if name == "add_note":
+        return text.startswith("Note recorded")
+    if name == "update_coverage":
+        return before != after
+    return False
+
+
 class AuditLoop:
     def __init__(
         self,
@@ -92,6 +109,7 @@ class AuditLoop:
         self.ctx = toolbox.ToolContext(state=state, allow_exec=config.allow_exec)
         self.llm_calls = 0
         self.repeats = 0
+        self.stalled_turns = 0
         self.done_calls: dict[str, tuple[int, str]] = {}
 
     # ------------------------------------------------------------ helpers --
@@ -166,9 +184,12 @@ class AuditLoop:
                 )
                 ok = False
             else:
+                coverage_before = dict(self.state.coverage)
                 text, args, ok = toolbox.execute(self.ctx, call.name, call.arguments)
                 if key and ok:
                     self.done_calls[key] = (step, text)
+                if _is_progress(call.name, key, ok, text, coverage_before, self.state.coverage):
+                    turn.progress = True
             turn.calls.append(call)
             turn.results.append(text)
             turn.args.append(args)
@@ -197,6 +218,7 @@ class AuditLoop:
 
     # ------------------------------------------------------------ phase 1 --
     def investigate(self) -> tuple[str, int]:
+        self.stalled_turns = 0
         turns: list[Turn] = []
         tail: list[dict] = []
         step = 0
@@ -215,6 +237,12 @@ class AuditLoop:
                 extra.append(prompts.BUDGET_LOW.format(left=left))
             if self.repeats >= 2:
                 extra.append(prompts.LOOPING.format(n=self.repeats))
+            if self.stalled_turns:
+                extra.append(
+                    prompts.STALLED.format(
+                        n=self.stalled_turns, left=self.cfg.max_stalled_turns - self.stalled_turns
+                    )
+                )
             try:
                 resp, elapsed, _ = self._ask(
                     "investigation", step, self.cfg.max_steps, allowed, turns, extra, tail
@@ -274,6 +302,19 @@ class AuditLoop:
                 ]
                 continue
             turns.append(turn)
+            self.stalled_turns = 0 if turn.progress else self.stalled_turns + 1
+            if self.stalled_turns >= self.cfg.max_stalled_turns and not self.state.finished:
+                # The model only repeats itself: treat the investigation as complete.
+                self.trace.write(
+                    {
+                        "step": step,
+                        "phase": "investigation",
+                        "event": "stalled",
+                        "turns_without_progress": self.stalled_turns,
+                    }
+                )
+                self.log(f"[investigation {step}] no new information for {self.stalled_turns} steps")
+                return "stalled", step
             if self.state.finished:
                 pending = self.state.pending_areas()
                 if pending and not finish_reminded:
