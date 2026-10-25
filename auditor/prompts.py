@@ -96,6 +96,10 @@ BUDGET_LOW = (
     "Budget low: {left} steps left. Record any violations you saw but did not record "
     "(record_violations), mark the remaining areas with update_coverage, then call finish."
 )
+STALLED = (
+    "WARNING: your last {n} step(s) gave no new information (repeats or duplicates). If you have no new "
+    "file or area to examine, call finish now. The investigation stops after {left} more step(s) like this."
+)
 LOOPING = (
     "WARNING: you repeated {n} identical calls. You already have that evidence. Record the "
     "violations it showed now, mark areas examined, and move on or call finish."
